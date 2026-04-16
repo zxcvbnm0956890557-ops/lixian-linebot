@@ -75,27 +75,40 @@ def fix_phone(p):
     return s
 
 def parse_order(text):
-    phone_match = re.search(r"0\d[\d\-]{8,10}", text)
+    # 把多行文字合併，用空格分隔
+    lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
+    combined = " ".join(lines)
+
+    # 找電話
+    phone_match = re.search(r"0\d[\d\-]{8,10}", combined)
     if not phone_match:
         return None
-
     phone = fix_phone(phone_match.group())
 
-    qty5_match = re.search(r"5斤[：:]?\s*(\d+)\s*箱", text)
-    qty10_match = re.search(r"10斤[：:]?\s*(\d+)\s*箱", text)
+    # 找數量
+    qty5_match = re.search(r"5斤[：:]?\s*(\d+)\s*箱", combined)
+    qty10_match = re.search(r"10斤[：:]?\s*(\d+)\s*箱", combined)
     qty5 = int(qty5_match.group(1)) if qty5_match else 0
     qty10 = int(qty10_match.group(1)) if qty10_match else 0
 
     if qty5 == 0 and qty10 == 0:
         return None
 
-    remainder = text[:phone_match.start()].strip()
-    tokens = remainder.split()
-    name = tokens[0] if tokens else ""
+    # 移除電話和數量後，剩下的是姓名和地址
+    remaining = combined
+    remaining = remaining[:phone_match.start()] + remaining[phone_match.end():]
+    remaining = re.sub(r"\d+斤[：:]?\s*\d+\s*箱", "", remaining).strip()
+    remaining = re.sub(r"\s+", " ", remaining).strip()
 
-    after_phone = text[phone_match.end():].strip()
-    after_phone = re.sub(r"\d+斤[：:]?\s*\d+\s*箱", "", after_phone).strip()
-    addr = after_phone if after_phone else ""
+    # 用地址關鍵字切割姓名和地址
+    addr_match = re.search(r"(.{2,5}?)((?:市|縣).+)", remaining)
+    if addr_match:
+        name = addr_match.group(1).strip()
+        addr = addr_match.group(2).strip()
+    else:
+        tokens = remaining.split()
+        name = tokens[0] if tokens else ""
+        addr = " ".join(tokens[1:]) if len(tokens) > 1 else ""
 
     if not name or not addr:
         return None
@@ -113,16 +126,16 @@ def write_to_sheet(order):
         sheet = get_sheet()
         now = datetime.now(TZ).strftime("%Y/%m/%d %H:%M:%S")
         row = [
-            now,                                                    # A 時間戳記
-            order["name"],                                          # B 訂購人姓名
-            order["phone"],                                         # C 訂購人電話
-            "LINE訂單",                                             # D Line暱稱
-            "",                                                     # E 收貨人姓名
-            "",                                                     # F 收貨人電話
-            order["addr"],                                          # G 收貨地址
-            str(order["qty5"]) if order["qty5"] > 0 else "",       # H 5斤數量
-            str(order["qty10"]) if order["qty10"] > 0 else "",     # I 10斤數量
-            "",                                                     # J 備註
+            now,
+            order["name"],
+            order["phone"],
+            "LINE訂單",
+            "",
+            "",
+            order["addr"],
+            str(order["qty5"]) if order["qty5"] > 0 else "",
+            str(order["qty10"]) if order["qty10"] > 0 else "",
+            "",
         ]
         sheet.append_row(row)
         return True
