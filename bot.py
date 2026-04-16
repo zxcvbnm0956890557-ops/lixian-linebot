@@ -1,8 +1,6 @@
 import os
 import re
 import json
-import csv
-import io
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from flask import Flask, request, abort
@@ -13,18 +11,29 @@ from linebot.v3.messaging import (
     ReplyMessageRequest, TextMessage
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
+import gspread
+from google.oauth2.service_account import Credentials
 
 app = Flask(__name__)
 TZ = ZoneInfo("Asia/Taipei")
 
 CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
 CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
+GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS_JSON"]
+SHEET_ID = os.environ["SHEET_ID"]
 
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
-# In-memory 訂單儲存
-orders = []
+def get_sheet():
+    creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
+    creds = Credentials.from_service_account_info(
+        creds_dict,
+        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    )
+    client = gspread.authorize(creds)
+    spreadsheet = client.open_by_key(SHEET_ID)
+    return spreadsheet.worksheet("表單回覆1")
 
 VALID = [
     {"s5": 4, "s10": 0, "label": "5斤4箱"},
@@ -97,23 +106,32 @@ def parse_order(text):
         "addr": addr,
         "qty5": qty5,
         "qty10": qty10,
-        "date": datetime.now(TZ).strftime("%Y-%m-%d"),
     }
 
-def generate_csv():
-    rows = ["收件人姓名,收件人手機,收件人地址,備註,寄件人姓名,寄件人手機"]
-    for o in orders:
-        result = best_split(o["qty5"], o["qty10"])
-        for ship in result["shipments"]:
-            rows.append(",".join([
-                f'"{o["name"]}"',
-                f'"{o["phone"]}"',
-                f'"{o["addr"]}"',
-                f'"{ship["label"]}"',
-                '""',
-                '""',
-            ]))
-    return "\n".join(rows)
+def write_to_sheet(order):
+    try:
+        sheet = get_sheet()
+        now = datetime.now(TZ).strftime("%Y/%m/%d %H:%M:%S")
+        qty_str = ""
+        if order["qty5"] > 0:
+            qty_str += f"5斤{order['qty5']}箱"
+        if order["qty10"] > 0:
+            qty_str += f"10斤{order['qty10']}箱"
+        row = [
+            now,
+            order["name"],
+            order["phone"],
+            "LINE訂單",
+            "收貨人就是我：訂購人本身",
+            "收貨人就是我：訂購人本身",
+            order["addr"],
+            qty_str,
+        ]
+        sheet.append_row(row)
+        return True
+    except Exception as e:
+        print(f"寫入試算表失敗：{e}")
+        return False
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -132,52 +150,27 @@ def handle_message(event):
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
 
-        # 指令：列表
-        if text in ("/list", "列表", "今日訂單"):
-            if not orders:
-                reply = "今天還沒有手動訂單"
-            else:
-                lines = [f"{i+1}. {o['name']} / {o['phone']} / 5斤{o['qty5']}+10斤{o['qty10']}"
-                         for i, o in enumerate(orders)]
-                reply = f"今日手動訂單（{len(orders)}筆）：\n" + "\n".join(lines)
-            line_bot_api.reply_message(
-                ReplyMessageRequest(reply_token=event.reply_token,
-                                    messages=[TextMessage(text=reply)])
-            )
-            return
-
-        # 指令：清除
-        if text in ("/clear", "清除"):
-            orders.clear()
-            line_bot_api.reply_message(
-                ReplyMessageRequest(reply_token=event.reply_token,
-                                    messages=[TextMessage(text="✅ 已清除所有手動訂單")])
-            )
-            return
-
-        # 解析訂單
         order = parse_order(text)
         if order:
-            orders.append(order)
             result = best_split(order["qty5"], order["qty10"])
             ships = " + ".join([s["label"] for s in result["shipments"]])
-            reply = f"✅ 已收到訂單：\n{order['name']} / {order['phone']}\n{order['addr']}\n分件：{ships}（運費${result['cost']}）"
+            success = write_to_sheet(order)
+            sheet_status = "已記錄到表單" if success else "⚠️ 表單記錄失敗"
+            reply = (
+                f"✅ 已收到訂單：\n"
+                f"{order['name']} / {order['phone']}\n"
+                f"{order['addr']}\n"
+                f"分件：{ships}（運費${result['cost']}）\n"
+                f"{sheet_status}"
+            )
             line_bot_api.reply_message(
                 ReplyMessageRequest(reply_token=event.reply_token,
                                     messages=[TextMessage(text=reply)])
             )
-
-@app.route("/get-csv", methods=["GET"])
-def get_csv():
-    csv_content = generate_csv()
-    return csv_content, 200, {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": f"attachment; filename=manual_orders_{datetime.now(TZ).strftime('%Y%m%d')}.csv"
-    }
 
 @app.route("/", methods=["GET"])
 def health():
-    return f"Line Bot running. 今日手動訂單：{len(orders)}筆"
+    return "Line Bot running."
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
