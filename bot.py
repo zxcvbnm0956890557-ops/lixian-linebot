@@ -112,20 +112,17 @@ def write_to_sheet(order):
     try:
         sheet = get_sheet()
         now = datetime.now(TZ).strftime("%Y/%m/%d %H:%M:%S")
-        qty_str = ""
-        if order["qty5"] > 0:
-            qty_str += f"5斤{order['qty5']}箱"
-        if order["qty10"] > 0:
-            qty_str += f"10斤{order['qty10']}箱"
         row = [
-            now,
-            order["name"],
-            order["phone"],
-            "LINE訂單",
-            "收貨人就是我：訂購人本身",
-            "收貨人就是我：訂購人本身",
-            order["addr"],
-            qty_str,
+            now,                                                    # A 時間戳記
+            order["name"],                                          # B 訂購人姓名
+            order["phone"],                                         # C 訂購人電話
+            "LINE訂單",                                             # D Line暱稱
+            "",                                                     # E 收貨人姓名
+            "",                                                     # F 收貨人電話
+            order["addr"],                                          # G 收貨地址
+            str(order["qty5"]) if order["qty5"] > 0 else "",       # H 5斤數量
+            str(order["qty10"]) if order["qty10"] > 0 else "",     # I 10斤數量
+            "",                                                     # J 備註
         ]
         sheet.append_row(row)
         return True
@@ -155,7 +152,7 @@ def handle_message(event):
             result = best_split(order["qty5"], order["qty10"])
             ships = " + ".join([s["label"] for s in result["shipments"]])
             success = write_to_sheet(order)
-            sheet_status = "已記錄到表單" if success else "⚠️ 表單記錄失敗"
+            sheet_status = "已記錄到表單 ✅" if success else "⚠️ 表單記錄失敗"
             reply = (
                 f"✅ 已收到訂單：\n"
                 f"{order['name']} / {order['phone']}\n"
