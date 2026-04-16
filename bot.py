@@ -12,14 +12,13 @@ from linebot.v3.messaging import (
     Configuration, ApiClient, MessagingApi,
     ReplyMessageRequest, TextMessage
 )
-from linebot.v3.webhooks import MessageEvent, TextMessageContent, GroupSource
+from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
 app = Flask(__name__)
 TZ = ZoneInfo("Asia/Taipei")
 
 CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
 CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
-GROUP_ID = os.environ.get("LINE_GROUP_ID", "")
 
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
@@ -67,7 +66,6 @@ def fix_phone(p):
     return s
 
 def parse_order(text):
-    """解析訂單文字，格式：姓名 電話 地址 5斤N箱 10斤N箱"""
     phone_match = re.search(r"0\d[\d\-]{8,10}", text)
     if not phone_match:
         return None
@@ -85,9 +83,8 @@ def parse_order(text):
     remainder = text[:phone_match.start()].strip()
     tokens = remainder.split()
     name = tokens[0] if tokens else ""
-    
+
     after_phone = text[phone_match.end():].strip()
-    # 移除數量資訊
     after_phone = re.sub(r"\d+斤[：:]?\s*\d+\s*箱", "", after_phone).strip()
     addr = after_phone if after_phone else ""
 
@@ -131,10 +128,6 @@ def callback():
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     text = event.message.text.strip()
-    
-    # 只處理群組訊息
-    if not isinstance(event.source, GroupSource):
-        return
 
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
@@ -144,7 +137,7 @@ def handle_message(event):
             if not orders:
                 reply = "今天還沒有手動訂單"
             else:
-                lines = [f"{i+1}. {o['name']} / {o['phone']} / 5斤{o['qty5']}+10斤{o['qty10']}" 
+                lines = [f"{i+1}. {o['name']} / {o['phone']} / 5斤{o['qty5']}+10斤{o['qty10']}"
                          for i, o in enumerate(orders)]
                 reply = f"今日手動訂單（{len(orders)}筆）：\n" + "\n".join(lines)
             line_bot_api.reply_message(
