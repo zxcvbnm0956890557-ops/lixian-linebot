@@ -75,42 +75,51 @@ def fix_phone(p):
     return s
 
 def parse_order(text):
-    # 把多行文字合併，用空格分隔
+    # 把每行分開處理
     lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
-    combined = " ".join(lines)
+    
+    phone = None
+    qty5 = 0
+    qty10 = 0
+    name = ""
+    addr = ""
 
-    # 找電話
-    phone_match = re.search(r"0\d[\d\-]{8,10}", combined)
-    if not phone_match:
-        return None
-    phone = fix_phone(phone_match.group())
+    for line in lines:
+        # 找電話
+        if re.match(r"^0\d[\d\-]{8,10}$", line.replace("-", "").replace(" ", "")):
+            phone = fix_phone(line)
+            continue
+        
+        # 找數量
+        has_qty = False
+        q5 = re.search(r"5斤[：:]?\s*(\d+)\s*箱", line)
+        q10 = re.search(r"10斤[：:]?\s*(\d+)\s*箱", line)
+        if q5:
+            qty5 = int(q5.group(1))
+            has_qty = True
+        if q10:
+            qty10 = int(q10.group(1))
+            has_qty = True
+        if has_qty:
+            continue
+        
+        # 找地址（含縣市關鍵字）
+        if re.search(r"(台|臺|高|新|桃|苗|彰|南|嘉|屏|宜|花|東|基|雲|澎|金|連).{1,3}(市|縣)", line):
+            addr = line
+            continue
+        
+        # 剩下的是姓名
+        if not name:
+            name = line
 
-    # 找數量
-    qty5_match = re.search(r"5斤[：:]?\s*(\d+)\s*箱", combined)
-    qty10_match = re.search(r"10斤[：:]?\s*(\d+)\s*箱", combined)
-    qty5 = int(qty5_match.group(1)) if qty5_match else 0
-    qty10 = int(qty10_match.group(1)) if qty10_match else 0
+    # 如果沒找到電話，用寬鬆方式搜尋整段文字
+    if not phone:
+        combined = " ".join(lines)
+        phone_match = re.search(r"0\d[\d\-]{8,10}", combined)
+        if phone_match:
+            phone = fix_phone(phone_match.group())
 
-    if qty5 == 0 and qty10 == 0:
-        return None
-
-    # 移除電話和數量後，剩下的是姓名和地址
-    remaining = combined
-    remaining = remaining[:phone_match.start()] + remaining[phone_match.end():]
-    remaining = re.sub(r"\d+斤[：:]?\s*\d+\s*箱", "", remaining).strip()
-    remaining = re.sub(r"\s+", " ", remaining).strip()
-
-    # 用地址關鍵字切割姓名和地址
-    addr_match = re.search(r"(.{2,5}?)((?:市|縣).+)", remaining)
-    if addr_match:
-        name = addr_match.group(1).strip()
-        addr = addr_match.group(2).strip()
-    else:
-        tokens = remaining.split()
-        name = tokens[0] if tokens else ""
-        addr = " ".join(tokens[1:]) if len(tokens) > 1 else ""
-
-    if not name or not addr:
+    if not phone or (qty5 == 0 and qty10 == 0) or not name or not addr:
         return None
 
     return {
