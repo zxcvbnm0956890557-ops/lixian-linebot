@@ -36,7 +36,7 @@ VALID = [
     {"s5": 0, "s10": 1, "cost": 140, "label": "10斤1箱"},
 ]
 
-HEADERS = ["時間戳記", "收貨人姓名", "收貨人電話", "收貨地址", "5斤幾箱", "10斤幾箱", "備註"]
+HEADERS = ["時間戳記", "收貨人姓名", "收貨人電話", "收貨地址", "5斤幾箱", "10斤幾箱", "備註", "狀態"]
 
 
 def get_sheet():
@@ -145,6 +145,7 @@ def write_to_sheet(order):
             order["addr"],
             f"5斤：{order['qty5']}箱",
             f"10斤：{order['qty10']}箱",
+            "",
             "",
         ]
         ws.append_row(row, value_input_option="USER_ENTERED")
