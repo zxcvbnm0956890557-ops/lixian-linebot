@@ -97,12 +97,13 @@ def parse_order(text):
     qty5 = int(q5.group(1)) if q5 else 0
     qty10 = int(q10.group(1)) if q10 else 0
 
-    # 從各行找地址（含縣市，去除地址標籤）
+    # 從各行找地址（只抓縣市開頭的那段，不把整行吃進去）
     addr = ""
     for line in lines:
         clean = re.sub(r'^(地址|收貨住址|收件地址|寄送地址|配送地址)[：:]\s*', '', line)
-        if re.search(r"(台|臺|高|新|桃|苗|彰|南|嘉|屏|宜|花|東|基|雲|澎|金|連).{1,3}(市|縣)", clean):
-            addr = clean
+        m = re.search(r'(台|臺|高|新|桃|苗|彰|南|嘉|屏|宜|花|東|基|雲|澎|金|連)\S*(市|縣)\S+', clean)
+        if m:
+            addr = m.group()
             break
 
     # 找姓名：排除電話行、地址行、數量行、【備注】行
