@@ -91,9 +91,9 @@ def parse_order(text):
     phone_match = re.search(r"0\d[\d\-]{8,10}", combined.replace(" ", ""))
     phone = fix_phone(phone_match.group()) if phone_match else None
 
-    # 從全文找數量（「箱」可有可無，支援「5斤4」「5斤4箱」「5斤：4箱」）
-    q5 = re.search(r"5斤[：:\-]?\s*(\d+)\s*箱?", combined)
-    q10 = re.search(r"10斤[：:\-]?\s*(\d+)\s*箱?", combined)
+    # 從全文找數量（支援「5斤4」「5斤4箱」「5斤：4箱」「5斤裝+4」）
+    q5 = re.search(r"5斤[裝装]?[：:+＋\-]?\s*(\d+)\s*[箱個]?", combined)
+    q10 = re.search(r"10斤[裝装]?[：:+＋\-]?\s*(\d+)\s*[箱個]?", combined)
     qty5 = int(q5.group(1)) if q5 else 0
     qty10 = int(q10.group(1)) if q10 else 0
 
@@ -163,6 +163,33 @@ def parse_order(text):
     }
 
 
+def parse_multi_orders(text):
+    """處理一人多地址複合訂單，拆成多筆 order dict。"""
+    combined = text.strip()
+    non_empty = [(i, l.strip()) for i, l in enumerate(combined.splitlines()) if l.strip()]
+
+    # 找每個「數量行 + 緊接著收件人行」的區塊起點
+    block_starts = []
+    for k, (idx, line) in enumerate(non_empty):
+        if re.search(r'[5５][斤]|10斤', line):
+            if k + 1 < len(non_empty) and re.match(r'收件人[：:]', non_empty[k + 1][1]):
+                block_starts.append(idx)
+
+    if len(block_starts) <= 1:
+        order = parse_order(combined)
+        return [order] if order else []
+
+    orders = []
+    for k, start in enumerate(block_starts):
+        end = block_starts[k + 1] if k + 1 < len(block_starts) else float('inf')
+        block_lines = [l for i, l in non_empty if start <= i < end]
+        order = parse_order('\n'.join(block_lines))
+        if order:
+            orders.append(order)
+
+    return orders
+
+
 def write_to_sheet(order):
     try:
         ws = get_sheet()
@@ -202,8 +229,26 @@ def handle_message(event):
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
 
-        order = parse_order(text)
-        if order:
+        orders = parse_multi_orders(text)
+
+        if len(orders) > 1:
+            parts = [f"✅ 收到 {len(orders)} 筆訂單："]
+            all_ok = True
+            for i, o in enumerate(orders, 1):
+                res = best_split(o["qty5"], o["qty10"])
+                ships = " + ".join([s["label"] for s in res["shipments"]])
+                if not write_to_sheet(o):
+                    all_ok = False
+                parts.append(
+                    f"\n{i}. {o['name']} / {o['phone']}\n"
+                    f"   {o['addr']}\n"
+                    f"   {ships}（${res['cost']}）"
+                )
+            parts.append("\n全部記錄到試算表 ✅" if all_ok else "\n⚠️ 部分試算表記錄失敗")
+            reply = "\n".join(parts)
+
+        elif len(orders) == 1:
+            order = orders[0]
             result = best_split(order["qty5"], order["qty10"])
             ships = " + ".join([s["label"] for s in result["shipments"]])
             success = write_to_sheet(order)
