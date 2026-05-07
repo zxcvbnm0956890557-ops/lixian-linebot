@@ -91,17 +91,18 @@ def parse_order(text):
     phone_match = re.search(r"0\d[\d\-]{8,10}", combined.replace(" ", ""))
     phone = fix_phone(phone_match.group()) if phone_match else None
 
-    # 從全文找數量
-    q5 = re.search(r"5斤[：:\-]?\s*(\d+)\s*箱", combined)
-    q10 = re.search(r"10斤[：:\-]?\s*(\d+)\s*箱", combined)
+    # 從全文找數量（「箱」可有可無，支援「5斤4」「5斤4箱」「5斤：4箱」）
+    q5 = re.search(r"5斤[：:\-]?\s*(\d+)\s*箱?", combined)
+    q10 = re.search(r"10斤[：:\-]?\s*(\d+)\s*箱?", combined)
     qty5 = int(q5.group(1)) if q5 else 0
     qty10 = int(q10.group(1)) if q10 else 0
 
-    # 從各行找地址（含縣市）
+    # 從各行找地址（含縣市，去除「地址：」標籤）
     addr = ""
     for line in lines:
-        if re.search(r"(台|臺|高|新|桃|苗|彰|南|嘉|屏|宜|花|東|基|雲|澎|金|連).{1,3}(市|縣)", line):
-            addr = line
+        clean = re.sub(r'^地址[：:]\s*', '', line)
+        if re.search(r"(台|臺|高|新|桃|苗|彰|南|嘉|屏|宜|花|東|基|雲|澎|金|連).{1,3}(市|縣)", clean):
+            addr = clean
             break
 
     # 找姓名：排除電話行、地址行、數量行
@@ -109,12 +110,16 @@ def parse_order(text):
     for line in lines:
         if phone and re.search(r"0\d[\d\-]{8,10}", line.replace(" ", "")):
             continue
-        if addr and addr in line:
+        if addr and (addr in line or re.search(r"(台|臺|高|新|桃|苗|彰|南|嘉|屏|宜|花|東|基|雲|澎|金|連).{1,3}(市|縣)", line)):
             continue
         if re.search(r"[5１][斤]|[10１０][斤]", line):
             continue
         if line and not name:
-            name = line
+            # 去除「訂購人：」「姓名：」「收件人：」等標籤，去除括號備註
+            clean = re.sub(r'^(訂購人|姓名|收件人|購買人)[：:]\s*', '', line)
+            clean = re.sub(r'[（(].*', '', clean).strip()
+            if clean:
+                name = clean
             break
 
     # 單行輸入：從剩餘文字中提取姓名
