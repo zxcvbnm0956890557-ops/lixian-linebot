@@ -19,31 +19,42 @@ TZ = ZoneInfo("Asia/Taipei")
 
 CHANNEL_SECRET = os.environ["LINE_CHANNEL_SECRET"]
 CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
-GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS_JSON"]
-SHEET_ID = os.environ["SHEET_ID"]
+GOOGLE_CREDENTIALS = os.environ["GOOGLE_CREDENTIALS"]
+SHEET_ID = "16ekyKXYK_anAGD3LbipriX4ZSzEcS5CCljapxy0CBfw"
+WORKSHEET_NAME = "LINE訂單"
 
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
+VALID = [
+    {"s5": 4, "s10": 0, "cost": 200, "label": "5斤4箱"},
+    {"s5": 2, "s10": 1, "cost": 200, "label": "5斤2+10斤1"},
+    {"s5": 1, "s10": 1, "cost": 200, "label": "5斤1+10斤1"},
+    {"s5": 0, "s10": 2, "cost": 200, "label": "10斤2箱"},
+    {"s5": 2, "s10": 0, "cost": 180, "label": "5斤2箱"},
+    {"s5": 1, "s10": 0, "cost": 140, "label": "5斤1箱"},
+    {"s5": 0, "s10": 1, "cost": 140, "label": "10斤1箱"},
+]
+
+HEADERS = ["時間戳記", "收貨人姓名", "收貨人電話", "收貨地址", "5斤幾箱", "10斤幾箱", "備註", "狀態"]
+
+
 def get_sheet():
-    creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
+    creds_dict = json.loads(GOOGLE_CREDENTIALS)
     creds = Credentials.from_service_account_info(
         creds_dict,
         scopes=["https://www.googleapis.com/auth/spreadsheets"]
     )
     client = gspread.authorize(creds)
     spreadsheet = client.open_by_key(SHEET_ID)
-    return spreadsheet.worksheet("表單回覆1")
+    try:
+        ws = spreadsheet.worksheet(WORKSHEET_NAME)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title=WORKSHEET_NAME, rows=1000, cols=10)
+        ws.append_row(HEADERS)
+        ws.format("C:C", {"numberFormat": {"type": "TEXT"}})
+    return ws
 
-VALID = [
-    {"s5": 4, "s10": 0, "label": "5斤4箱"},
-    {"s5": 2, "s10": 1, "label": "5斤2+10斤1"},
-    {"s5": 1, "s10": 1, "label": "5斤1+10斤1"},
-    {"s5": 0, "s10": 2, "label": "10斤2箱"},
-    {"s5": 2, "s10": 0, "label": "5斤2箱"},
-    {"s5": 1, "s10": 0, "label": "5斤1箱"},
-    {"s5": 0, "s10": 1, "label": "10斤1箱"},
-]
 
 def best_split(s5, s10):
     memo = {}
@@ -53,26 +64,24 @@ def best_split(s5, s10):
             return memo[key]
         if r5 == 0 and r10 == 0:
             return {"cost": 0, "shipments": []}
-        costs = {
-            (4,0):200,(2,1):200,(1,1):200,(0,2):200,
-            (2,0):180,(1,0):140,(0,1):140
-        }
         best = {"cost": 999999, "shipments": None}
         for v in VALID:
             if v["s5"] <= r5 and v["s10"] <= r10:
                 sub = dp(r5 - v["s5"], r10 - v["s10"])
-                cost = costs[(v["s5"], v["s10"])] + sub["cost"]
+                cost = v["cost"] + sub["cost"]
                 if cost < best["cost"]:
                     best = {"cost": cost, "shipments": [v] + sub["shipments"]}
         memo[key] = best
         return best
     return dp(s5, s10)
 
+
 def fix_phone(p):
     s = re.sub(r"[^0-9]", "", str(p).strip())
     while len(s) < 10:
         s = "0" + s
     return s
+
 
 def parse_order(text):
     combined = text.strip()
@@ -95,7 +104,7 @@ def parse_order(text):
             addr = line
             break
 
-    # 找姓名：逐行排除電話行、地址行、數量行，剩下第一個純中文詞
+    # 找姓名：排除電話行、地址行、數量行
     name = ""
     for line in lines:
         if phone and re.search(r"0\d[\d\-]{8,10}", line.replace(" ", "")):
@@ -136,27 +145,27 @@ def parse_order(text):
         "qty10": qty10,
     }
 
+
 def write_to_sheet(order):
     try:
-        sheet = get_sheet()
+        ws = get_sheet()
         now = datetime.now(TZ).strftime("%Y/%m/%d %H:%M:%S")
         row = [
             now,
             order["name"],
             order["phone"],
-            "LINE訂單",
-            "",
-            "",
             order["addr"],
-            str(order["qty5"]) if order["qty5"] > 0 else "",
-            str(order["qty10"]) if order["qty10"] > 0 else "",
+            f"5斤：{order['qty5']}箱",
+            f"10斤：{order['qty10']}箱",
+            "",
             "",
         ]
-        sheet.append_row(row)
+        ws.append_row(row, value_input_option="USER_ENTERED")
         return True
     except Exception as e:
         print(f"寫入試算表失敗：{e}")
         return False
+
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -167,6 +176,7 @@ def callback():
     except InvalidSignatureError:
         abort(400)
     return "OK"
+
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
@@ -180,7 +190,7 @@ def handle_message(event):
             result = best_split(order["qty5"], order["qty10"])
             ships = " + ".join([s["label"] for s in result["shipments"]])
             success = write_to_sheet(order)
-            sheet_status = "已記錄到表單 ✅" if success else "⚠️ 表單記錄失敗"
+            sheet_status = "已記錄到試算表 ✅" if success else "⚠️ 試算表記錄失敗"
             reply = (
                 f"✅ 已收到訂單：\n"
                 f"{order['name']} / {order['phone']}\n"
@@ -203,13 +213,22 @@ def handle_message(event):
                 "5斤2箱 10斤1箱"
             )
         line_bot_api.reply_message(
-            ReplyMessageRequest(reply_token=event.reply_token,
-                                messages=[TextMessage(text=reply)])
+            ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[TextMessage(text=reply)]
+            )
         )
 
-@app.route("/", methods=["GET"])
+
+@app.route("/health", methods=["GET"])
 def health():
-    return "Line Bot running."
+    return "OK", 200
+
+
+@app.route("/", methods=["GET"])
+def index():
+    return "LINE Bot running.", 200
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
