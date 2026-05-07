@@ -105,22 +105,33 @@ def parse_order(text):
             addr = clean
             break
 
-    # 找姓名：排除電話行、地址行、數量行
+    # 找姓名：排除電話行、地址行、數量行、【備注】行
+    # 優先找 2-4 字純中文（人名），fallback 才取其他行
     name = ""
+    candidates = []
     for line in lines:
+        if re.search(r'[【】]', line):          # 【備注】直接跳過
+            continue
         if phone and re.search(r"0\d[\d\-]{8,10}", line.replace(" ", "")):
             continue
         if addr and (addr in line or re.search(r"(台|臺|高|新|桃|苗|彰|南|嘉|屏|宜|花|東|基|雲|澎|金|連).{1,3}(市|縣)", line)):
             continue
         if re.search(r"[5１][斤]|[10１０][斤]", line):
             continue
-        if line and not name:
-            # 去除「訂購人：」「姓名：」「收件人：」等標籤，去除括號備註
-            clean = re.sub(r'^(訂購人|姓名|收件人|購買人)[：:]\s*', '', line)
-            clean = re.sub(r'[（(].*', '', clean).strip()
-            if clean:
-                name = clean
+        # 去除常見標籤和括號備注
+        clean = re.sub(r'^(訂購人|姓名|收件人|購買人)[：:]\s*', '', line)
+        clean = re.sub(r'[（(].*', '', clean).strip()
+        if clean:
+            candidates.append(clean)
+
+    # 優先選 2-4 字純中文（人名特徵）
+    for c in candidates:
+        if re.match(r'^[一-鿿]{2,4}$', c):
+            name = c
             break
+    # fallback：取第一個候選
+    if not name and candidates:
+        name = candidates[0]
 
     # 單行輸入：從剩餘文字中提取姓名
     if not name:
