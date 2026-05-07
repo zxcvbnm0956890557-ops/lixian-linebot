@@ -75,49 +75,55 @@ def fix_phone(p):
     return s
 
 def parse_order(text):
-    # 把每行分開處理
-    lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
-    
-    phone = None
-    qty5 = 0
-    qty10 = 0
-    name = ""
-    addr = ""
+    combined = text.strip()
+    lines = [l.strip() for l in combined.splitlines() if l.strip()]
 
+    # 從全文找電話
+    phone_match = re.search(r"0\d[\d\-]{8,10}", combined.replace(" ", ""))
+    phone = fix_phone(phone_match.group()) if phone_match else None
+
+    # 從全文找數量
+    q5 = re.search(r"5斤[：:\-]?\s*(\d+)\s*箱", combined)
+    q10 = re.search(r"10斤[：:\-]?\s*(\d+)\s*箱", combined)
+    qty5 = int(q5.group(1)) if q5 else 0
+    qty10 = int(q10.group(1)) if q10 else 0
+
+    # 從各行找地址（含縣市）
+    addr = ""
     for line in lines:
-        # 找電話
-        if re.match(r"^0\d[\d\-]{8,10}$", line.replace("-", "").replace(" ", "")):
-            phone = fix_phone(line)
-            continue
-        
-        # 找數量
-        has_qty = False
-        q5 = re.search(r"5斤[：:]?\s*(\d+)\s*箱", line)
-        q10 = re.search(r"10斤[：:]?\s*(\d+)\s*箱", line)
-        if q5:
-            qty5 = int(q5.group(1))
-            has_qty = True
-        if q10:
-            qty10 = int(q10.group(1))
-            has_qty = True
-        if has_qty:
-            continue
-        
-        # 找地址（含縣市關鍵字）
         if re.search(r"(台|臺|高|新|桃|苗|彰|南|嘉|屏|宜|花|東|基|雲|澎|金|連).{1,3}(市|縣)", line):
             addr = line
-            continue
-        
-        # 剩下的是姓名
-        if not name:
-            name = line
+            break
 
-    # 如果沒找到電話，用寬鬆方式搜尋整段文字
-    if not phone:
-        combined = " ".join(lines)
-        phone_match = re.search(r"0\d[\d\-]{8,10}", combined)
+    # 找姓名：逐行排除電話行、地址行、數量行，剩下第一個純中文詞
+    name = ""
+    for line in lines:
+        if phone and re.search(r"0\d[\d\-]{8,10}", line.replace(" ", "")):
+            continue
+        if addr and addr in line:
+            continue
+        if re.search(r"[5１][斤]|[10１０][斤]", line):
+            continue
+        if line and not name:
+            name = line
+            break
+
+    # 單行輸入：從剩餘文字中提取姓名
+    if not name:
+        remaining = combined
         if phone_match:
-            phone = fix_phone(phone_match.group())
+            remaining = remaining.replace(phone_match.group(), " ")
+        if addr:
+            remaining = remaining.replace(addr, " ")
+        if q5:
+            remaining = remaining.replace(q5.group(), " ")
+        if q10:
+            remaining = remaining.replace(q10.group(), " ")
+        for token in re.split(r'[\s　]+', remaining):
+            token = token.strip()
+            if re.match(r'^[一-鿿]{1,5}$', token):
+                name = token
+                break
 
     if not phone or (qty5 == 0 and qty10 == 0) or not name or not addr:
         return None
@@ -182,10 +188,24 @@ def handle_message(event):
                 f"分件：{ships}（運費${result['cost']}）\n"
                 f"{sheet_status}"
             )
-            line_bot_api.reply_message(
-                ReplyMessageRequest(reply_token=event.reply_token,
-                                    messages=[TextMessage(text=reply)])
+        else:
+            reply = (
+                "⚠️ 無法辨識訂單格式\n\n"
+                "請包含以下四項：\n"
+                "・姓名\n"
+                "・電話（0開頭10碼）\n"
+                "・地址（含縣市）\n"
+                "・數量（5斤幾箱 / 10斤幾箱）\n\n"
+                "範例：\n"
+                "王小明\n"
+                "0912345678\n"
+                "台北市信義區松仁路100號\n"
+                "5斤2箱 10斤1箱"
             )
+        line_bot_api.reply_message(
+            ReplyMessageRequest(reply_token=event.reply_token,
+                                messages=[TextMessage(text=reply)])
+        )
 
 @app.route("/", methods=["GET"])
 def health():
