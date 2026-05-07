@@ -1,4 +1,5 @@
 flask==3.0.0
+gunicorn
 line-bot-sdk==3.11.0
 gspread
 google-auth
