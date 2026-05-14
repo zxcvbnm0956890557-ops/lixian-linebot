@@ -83,68 +83,169 @@ def fix_phone(p):
     return s
 
 
+def extract_addr(line):
+    """從一行文字中抽取地址（含縣市關鍵字）"""
+    clean = re.sub(r'^(地址|收貨住址|收件地址|寄送地址|配送地址)[：:]\s*', '', line)
+    m = re.search(r'(台|臺|高|新|桃|苗|彰|南|嘉|屏|宜|花|東|基|雲|澎|金|連)\S*(市|縣)\S+', clean)
+    return m.group() if m else None
+
+
+def parse_qty(text):
+    """從文字中解析 5斤 和 10斤 箱數，回傳 (qty5, qty10)"""
+    q5 = re.search(r'5斤[裝装]?[：:+＋\-]?\s*(\d+)\s*[箱個]?', text)
+    q10 = re.search(r'10斤[裝装]?[：:+＋\-]?\s*(\d+)\s*[箱個]?', text)
+    return int(q5.group(1)) if q5 else 0, int(q10.group(1)) if q10 else 0
+
+
+def parse_daigou_blocks(text):
+    """
+    解析「代購分寄」格式，每個區塊為：
+      數量行（結尾有 ：或 :）
+      地址行
+      收件人姓名+電話（可能連在一起，或分兩行）
+      （備注）
+    """
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+
+    # 找所有「含斤數且結尾是冒號」的行（每個區塊起點）
+    block_starts = []
+    for i, line in enumerate(lines):
+        if re.search(r'[5５]斤|10斤', line) and re.search(r'[：:]\s*$', line):
+            block_starts.append(i)
+
+    if not block_starts:
+        return []
+
+    orders = []
+    for k, start in enumerate(block_starts):
+        end = block_starts[k + 1] if k + 1 < len(block_starts) else len(lines)
+        block = lines[start:end]
+        qty_line = block[0]
+        rest = block[1:]
+
+        # 解析數量
+        qty_line_clean = re.sub(r'[：:]\s*$', '', qty_line)
+        qty5, qty10 = parse_qty(qty_line_clean)
+        if qty5 == 0 and qty10 == 0:
+            continue
+
+        # 找地址
+        addr = ""
+        addr_idx = -1
+        for i, line in enumerate(rest):
+            a = extract_addr(line)
+            if a:
+                addr = line  # 保留整行（含郵遞區號）
+                addr_idx = i
+                break
+
+        # 找備注（括號包起來的行）
+        note = ""
+        for i, line in enumerate(rest):
+            if i == addr_idx:
+                continue
+            if re.search(r'[（(【].*[）)】]', line) or re.match(r'^[（(【]', line):
+                note = re.sub(r'^[（(【\s]+|[）)】\s]+$', '', line).strip()
+
+        # 找電話和姓名
+        phone = None
+        name = ""
+        for i, line in enumerate(rest):
+            if i == addr_idx:
+                continue
+            if re.search(r'[（(【]', line) and note and note in line:
+                continue  # 備注行跳過
+
+            raw = line.replace(" ", "").replace("　", "")
+
+            # 姓名（2-8字中文）+電話 連在一起
+            m = re.search(r'([一-鿿]{2,8})(0\d{9,10})', raw)
+            if m:
+                name = m.group(1)
+                phone = fix_phone(m.group(2))
+                break
+
+            # 姓名/電話 或 姓名 電話
+            m2 = re.match(r'^([一-鿿\w]{2,8})\s*[/／\s]\s*(0\d[\d\-]{8,10})', line)
+            if m2:
+                name = m2.group(1)
+                phone = fix_phone(m2.group(2))
+                break
+
+            # 純電話行
+            m3 = re.search(r'0\d[\d\-]{8,10}', raw)
+            if m3:
+                phone = fix_phone(m3.group())
+                before = raw[:raw.index(m3.group())]
+                name_part = re.sub(r'[^一-鿿]', '', before)
+                if re.match(r'^[一-鿿]{2,8}$', name_part):
+                    name = name_part
+                break
+
+        if phone and addr and (qty5 > 0 or qty10 > 0):
+            orders.append({
+                "name": name or "未填姓名",
+                "phone": phone,
+                "addr": addr,
+                "qty5": qty5,
+                "qty10": qty10,
+                "note": note,
+            })
+
+    return orders
+
+
 def parse_order(text):
     combined = text.strip()
     lines = [l.strip() for l in combined.splitlines() if l.strip()]
 
-    # 從全文找電話
     phone_match = re.search(r"0\d[\d\-]{8,10}", combined.replace(" ", ""))
     phone = fix_phone(phone_match.group()) if phone_match else None
 
-    # 從全文找數量（支援「5斤4」「5斤4箱」「5斤：4箱」「5斤裝+4」）
-    q5 = re.search(r"5斤[裝装]?[：:+＋\-]?\s*(\d+)\s*[箱個]?", combined)
-    q10 = re.search(r"10斤[裝装]?[：:+＋\-]?\s*(\d+)\s*[箱個]?", combined)
-    qty5 = int(q5.group(1)) if q5 else 0
-    qty10 = int(q10.group(1)) if q10 else 0
+    qty5, qty10 = parse_qty(combined)
 
-    # 從各行找地址（只抓縣市開頭的那段，不把整行吃進去）
     addr = ""
     for line in lines:
-        clean = re.sub(r'^(地址|收貨住址|收件地址|寄送地址|配送地址)[：:]\s*', '', line)
-        m = re.search(r'(台|臺|高|新|桃|苗|彰|南|嘉|屏|宜|花|東|基|雲|澎|金|連)\S*(市|縣)\S+', clean)
-        if m:
-            addr = m.group()
+        a = extract_addr(line)
+        if a:
+            addr = a
             break
 
-    # 找姓名：排除電話行、地址行、數量行、【備注】行
-    # 優先找 2-4 字純中文（人名），fallback 才取其他行
     name = ""
     candidates = []
     for line in lines:
-        if re.search(r'[【】]', line):          # 【備注】直接跳過
+        if re.search(r'[【】]', line):
             continue
         if phone and re.search(r"0\d[\d\-]{8,10}", line.replace(" ", "")):
+            # 同行可能有姓名（姓名+電話連在一起）
+            raw = line.replace(" ", "")
+            m = re.search(r'([一-鿿]{2,8})(0\d{9,10})', raw)
+            if m and not name:
+                name = m.group(1)
             continue
         if addr and (addr in line or re.search(r"(台|臺|高|新|桃|苗|彰|南|嘉|屏|宜|花|東|基|雲|澎|金|連).{1,3}(市|縣)", line)):
             continue
         if re.search(r"[5１][斤]|[10１０][斤]", line):
             continue
-        # 去除常見標籤和括號備注
         clean = re.sub(r'^(訂購人|姓名|收件人|購買人)[：:]\s*', '', line)
         clean = re.sub(r'[（(].*', '', clean).strip()
         if clean:
             candidates.append(clean)
 
-    # 優先選 2-4 字純中文（人名特徵）
-    for c in candidates:
-        if re.match(r'^[一-鿿]{2,4}$', c):
-            name = c
-            break
-    # fallback：取第一個候選
-    if not name and candidates:
-        name = candidates[0]
+    if not name:
+        for c in candidates:
+            if re.match(r'^[一-鿿]{2,4}$', c):
+                name = c
+                break
+        if not name and candidates:
+            name = candidates[0]
 
-    # 單行輸入：從剩餘文字中提取姓名
     if not name:
         remaining = combined
         if phone_match:
             remaining = remaining.replace(phone_match.group(), " ")
         if addr:
             remaining = remaining.replace(addr, " ")
-        if q5:
-            remaining = remaining.replace(q5.group(), " ")
-        if q10:
-            remaining = remaining.replace(q10.group(), " ")
         for token in re.split(r'[\s　]+', remaining):
             token = token.strip()
             if re.match(r'^[一-鿿]{1,5}$', token):
@@ -154,40 +255,44 @@ def parse_order(text):
     if not phone or (qty5 == 0 and qty10 == 0) or not name or not addr:
         return None
 
-    return {
-        "name": name,
-        "phone": phone,
-        "addr": addr,
-        "qty5": qty5,
-        "qty10": qty10,
-    }
+    return {"name": name, "phone": phone, "addr": addr, "qty5": qty5, "qty10": qty10, "note": ""}
 
 
 def parse_multi_orders(text):
-    """處理一人多地址複合訂單，拆成多筆 order dict。"""
+    """處理各種格式的訂單，拆成多筆 order dict。"""
     combined = text.strip()
     non_empty = [(i, l.strip()) for i, l in enumerate(combined.splitlines()) if l.strip()]
 
-    # 找每個「數量行 + 緊接著收件人行」的區塊起點
+    # === 格式A：代購分寄（含「訂購人：」或數量行結尾有「：」）===
+    has_daigou = (
+        any(re.match(r'^(訂購人|購買人)[：:]', l) for _, l in non_empty) or
+        any(re.search(r'[5５]斤|10斤', l) and re.search(r'[：:]\s*$', l) for _, l in non_empty)
+    )
+    if has_daigou:
+        orders = parse_daigou_blocks(combined)
+        if orders:
+            return orders
+
+    # === 格式B：收件人標籤（收件人：姓名 緊接在數量行後）===
     block_starts = []
     for k, (idx, line) in enumerate(non_empty):
         if re.search(r'[5５][斤]|10斤', line):
             if k + 1 < len(non_empty) and re.match(r'收件人[：:]', non_empty[k + 1][1]):
                 block_starts.append(idx)
 
-    if len(block_starts) <= 1:
-        order = parse_order(combined)
-        return [order] if order else []
+    if len(block_starts) > 1:
+        orders = []
+        for k, start in enumerate(block_starts):
+            end = block_starts[k + 1] if k + 1 < len(block_starts) else float('inf')
+            block_lines = [l for i, l in non_empty if start <= i < end]
+            order = parse_order('\n'.join(block_lines))
+            if order:
+                orders.append(order)
+        return orders
 
-    orders = []
-    for k, start in enumerate(block_starts):
-        end = block_starts[k + 1] if k + 1 < len(block_starts) else float('inf')
-        block_lines = [l for i, l in non_empty if start <= i < end]
-        order = parse_order('\n'.join(block_lines))
-        if order:
-            orders.append(order)
-
-    return orders
+    # === fallback：單筆或其他格式 ===
+    order = parse_order(combined)
+    return [order] if order else []
 
 
 def write_to_sheet(order):
@@ -201,7 +306,7 @@ def write_to_sheet(order):
             order["addr"],
             f"5斤：{order['qty5']}箱",
             f"10斤：{order['qty10']}箱",
-            "",
+            order.get("note", ""),
             "",
         ]
         ws.append_row(row, value_input_option="USER_ENTERED")
@@ -239,10 +344,11 @@ def handle_message(event):
                 ships = " + ".join([s["label"] for s in res["shipments"]])
                 if not write_to_sheet(o):
                     all_ok = False
+                note_line = f"\n   備注：{o['note']}" if o.get("note") else ""
                 parts.append(
                     f"\n{i}. {o['name']} / {o['phone']}\n"
                     f"   {o['addr']}\n"
-                    f"   {ships}（${res['cost']}）"
+                    f"   {ships}（${res['cost']}）{note_line}"
                 )
             parts.append("\n全部記錄到試算表 ✅" if all_ok else "\n⚠️ 部分試算表記錄失敗")
             reply = "\n".join(parts)
@@ -253,11 +359,12 @@ def handle_message(event):
             ships = " + ".join([s["label"] for s in result["shipments"]])
             success = write_to_sheet(order)
             sheet_status = "已記錄到試算表 ✅" if success else "⚠️ 試算表記錄失敗"
+            note_line = f"\n備注：{order['note']}" if order.get("note") else ""
             reply = (
                 f"✅ 已收到訂單：\n"
                 f"{order['name']} / {order['phone']}\n"
                 f"{order['addr']}\n"
-                f"分件：{ships}（運費${result['cost']}）\n"
+                f"分件：{ships}（運費${result['cost']}）{note_line}\n"
                 f"{sheet_status}"
             )
         else:
