@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from typing import Callable
@@ -15,6 +16,15 @@ from validation import validate_extraction
 
 
 LOGGER = logging.getLogger(__name__)
+TEST_REPLY_PREFIX = "#測試"
+
+
+def split_test_reply_prefix(raw_text: str) -> tuple[bool, str]:
+    """只有明確加上 #測試 的訂單，才允許在 DRY_RUN 模式回覆 LINE。"""
+    if not raw_text.lstrip().startswith(TEST_REPLY_PREFIX):
+        return False, raw_text
+    cleaned = re.sub(r"^\s*#測試\s*", "", raw_text, count=1)
+    return True, cleaned.strip()
 
 
 def format_ready_message(order, package_count: int, sheet_status: str) -> str:
@@ -88,26 +98,31 @@ class OrderWorker:
     def _process(self, conversation) -> None:
         extraction = None
         try:
+            test_reply, parse_text = split_test_reply_prefix(conversation["raw_text"])
             LOGGER.info("訂單 %s 開始 AI 解析", conversation["id"])
-            extraction = self.parser.parse(conversation["raw_text"])
+            extraction = self.parser.parse(parse_text)
             LOGGER.info("訂單 %s AI 解析完成，開始驗證", conversation["id"])
             validation = validate_extraction(extraction)
             if validation.order is None:
                 issues = list(validation.issues)
                 self.database.mark_pending(conversation["id"], extraction, issues)
                 LOGGER.info("訂單 %s 需要人工確認（%s 項）", conversation["id"], len(issues))
-                if not self.dry_run:
+                if not self.dry_run or test_reply:
                     self.notifier(conversation["destination_id"], format_pending_message(extraction, issues))
                 return
 
             order = validation.order
             packages = split_packages(order.five_jin_boxes, order.ten_jin_boxes)
-            sheet_status = self.sheets.append_order(order, len(packages), conversation["raw_text"])
+            sheet_status = (
+                "測試模式（未寫入Google試算表）"
+                if self.dry_run
+                else self.sheets.append_order(order, len(packages), conversation["raw_text"])
+            )
             self.database.save_ready_order(
                 conversation, extraction, order, len(packages), sheet_status
             )
             LOGGER.info("訂單 %s 已完成，黑貓件數 %s", conversation["id"], len(packages))
-            if not self.dry_run:
+            if not self.dry_run or test_reply:
                 self.notifier(
                     conversation["destination_id"],
                     format_ready_message(order, len(packages), sheet_status),
@@ -117,7 +132,7 @@ class OrderWorker:
             self.database.mark_pending(
                 conversation["id"], extraction, [f"系統處理失敗：{type(error).__name__}"]
             )
-            if not self.dry_run:
+            if not self.dry_run or test_reply:
                 try:
                     self.notifier(
                         conversation["destination_id"],
