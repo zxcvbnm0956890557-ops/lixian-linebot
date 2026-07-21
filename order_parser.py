@@ -50,6 +50,7 @@ class OrderParser:
             instructions=SYSTEM_PROMPT,
             input=json.dumps(context, ensure_ascii=False),
             text_format=OrderExtraction,
+            timeout=float(os.getenv("OPENAI_TIMEOUT_SECONDS", "60")),
         )
         parsed = response.output_parsed
         if parsed is None:

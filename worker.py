@@ -88,11 +88,14 @@ class OrderWorker:
     def _process(self, conversation) -> None:
         extraction = None
         try:
+            LOGGER.info("訂單 %s 開始 AI 解析", conversation["id"])
             extraction = self.parser.parse(conversation["raw_text"])
+            LOGGER.info("訂單 %s AI 解析完成，開始驗證", conversation["id"])
             validation = validate_extraction(extraction)
             if validation.order is None:
                 issues = list(validation.issues)
                 self.database.mark_pending(conversation["id"], extraction, issues)
+                LOGGER.info("訂單 %s 需要人工確認（%s 項）", conversation["id"], len(issues))
                 if not self.dry_run:
                     self.notifier(conversation["destination_id"], format_pending_message(extraction, issues))
                 return
@@ -103,6 +106,7 @@ class OrderWorker:
             self.database.save_ready_order(
                 conversation, extraction, order, len(packages), sheet_status
             )
+            LOGGER.info("訂單 %s 已完成，黑貓件數 %s", conversation["id"], len(packages))
             if not self.dry_run:
                 self.notifier(
                     conversation["destination_id"],
@@ -131,4 +135,3 @@ def wait_until_idle(database: BotDatabase, timeout: float = 10.0) -> bool:
             return True
         time.sleep(0.1)
     return False
-
