@@ -1,15 +1,39 @@
 services:
   - type: web
-    name: lixian-linebot
-    env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn bot:app
+    name: lixian-linebot-codex
+    runtime: docker
+    plan: starter
+    autoDeploy: false
+    healthCheckPath: /health
     envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5.4-mini
       - key: LINE_CHANNEL_SECRET
         sync: false
       - key: LINE_CHANNEL_ACCESS_TOKEN
         sync: false
+      - key: LINE_REPORT_TARGET_ID
+        sync: false
       - key: GOOGLE_CREDENTIALS_JSON
         sync: false
-      - key: SHEET_ID
+      - key: GOOGLE_SHEET_ID
         sync: false
+      - key: GOOGLE_WORKSHEET_NAME
+        value: LINE訂單_Codex測試
+      - key: DATABASE_PATH
+        value: /var/data/bot.db
+      - key: ORDER_QUIET_SECONDS
+        value: "30"
+      - key: APP_TIMEZONE
+        value: Asia/Taipei
+      - key: DAILY_REPORT_HOUR
+        value: "21"
+      - key: DRY_RUN
+        value: "1"
+    disk:
+      name: bot-data
+      mountPath: /var/data
+      sizeGB: 1
+

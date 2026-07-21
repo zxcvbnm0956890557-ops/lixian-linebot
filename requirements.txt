@@ -1,5 +1,11 @@
-flask==3.0.0
-gunicorn
-line-bot-sdk==3.11.0
-gspread
-google-auth
+Flask>=3.0,<4
+gunicorn>=22,<24
+openai>=1.100,<3
+pydantic>=2.8,<3
+python-dotenv>=1.0,<2
+requests>=2.32,<3
+gspread>=6.1,<7
+google-auth>=2.30,<3
+APScheduler>=3.10,<4
+pytest>=8.2,<9
+

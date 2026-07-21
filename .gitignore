@@ -1,0 +1,13 @@
+.env
+.env.local
+.env.*.local
+!.env.example
+__pycache__/
+.pytest_cache/
+.venv/
+.test-venv/
+*.pyc
+*.pyo
+data/*.db
+data/*.db-*
+exports/*.csv
