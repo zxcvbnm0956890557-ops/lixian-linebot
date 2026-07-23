@@ -11,7 +11,7 @@ from flask import Flask, jsonify, request
 
 from daily_report import start_daily_scheduler
 from database import BotDatabase
-from line_api import verify_line_signature
+from line_api import line_access_token_fingerprint, verify_line_signature
 from worker import OrderWorker
 
 
@@ -36,6 +36,7 @@ def start_background_services() -> None:
     with _services_lock:
         if _services_started:
             return
+        LOGGER.info("LINE 權杖指紋：%s", line_access_token_fingerprint())
         OrderWorker(database).start()
         start_daily_scheduler(database)
         _services_started = True
@@ -98,4 +99,3 @@ start_background_services()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
-

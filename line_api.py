@@ -3,9 +3,18 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import os
 
 import requests
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def line_access_token_fingerprint() -> str:
+    token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:10] if token else "missing"
 
 
 def verify_line_signature(raw_body: bytes, signature: str) -> bool:
@@ -28,5 +37,11 @@ def push_text(destination_id: str, text: str) -> None:
         json={"to": destination_id, "messages": [{"type": "text", "text": text[:5000]}]},
         timeout=15,
     )
+    if not response.ok:
+        LOGGER.error(
+            "LINE push 失敗 status=%s token=%s response=%s",
+            response.status_code,
+            line_access_token_fingerprint(),
+            response.text[:500],
+        )
     response.raise_for_status()
-
