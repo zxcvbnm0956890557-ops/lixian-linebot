@@ -89,6 +89,14 @@ class OrderWorker:
     def stop(self) -> None:
         self._stop.set()
 
+    def _notify_safely(self, destination_id: str, text: str) -> None:
+        """LINE 回覆失敗不可反過來改壞已驗證、已保存的訂單狀態。"""
+
+        try:
+            self.notifier(destination_id, text)
+        except Exception:
+            LOGGER.exception("LINE 回覆失敗，訂單狀態保持不變")
+
     def run_forever(self) -> None:
         while not self._stop.wait(1):
             try:
@@ -137,7 +145,7 @@ class OrderWorker:
                     len(issues),
                 )
                 if not self.dry_run or test_reply:
-                    self.notifier(
+                    self._notify_safely(
                         conversation["destination_id"],
                         format_pending_batch(extraction, issues),
                     )
@@ -163,7 +171,7 @@ class OrderWorker:
                 sum(row[1] for row in rows),
             )
             if not self.dry_run or test_reply:
-                self.notifier(
+                self._notify_safely(
                     conversation["destination_id"],
                     format_ready_batch(rows),
                 )
@@ -173,13 +181,10 @@ class OrderWorker:
                 conversation["id"], extraction, [f"系統處理失敗：{type(error).__name__}"]
             )
             if not self.dry_run or test_reply:
-                try:
-                    self.notifier(
-                        conversation["destination_id"],
-                        "⚠️ 這筆訂單尚未寫入，系統已保留原始訊息供檢查。",
-                    )
-                except Exception:
-                    LOGGER.exception("LINE 錯誤通知失敗")
+                self._notify_safely(
+                    conversation["destination_id"],
+                    "⚠️ 這筆訂單尚未寫入，系統已保留原始訊息供檢查。",
+                )
 
 
 def wait_until_idle(database: BotDatabase, timeout: float = 10.0) -> bool:

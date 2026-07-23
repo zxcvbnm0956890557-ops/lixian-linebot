@@ -45,3 +45,9 @@ def push_text(destination_id: str, text: str) -> None:
             response.text[:500],
         )
     response.raise_for_status()
+    destination_fingerprint = hashlib.sha256(destination_id.encode("utf-8")).hexdigest()[:10]
+    LOGGER.info(
+        "LINE push 已由 API 接受 status=%s destination=%s",
+        response.status_code,
+        destination_fingerprint,
+    )
