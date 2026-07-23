@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from models import CleanOrder, OrderExtraction
+from pydantic import BaseModel
+
+from models import CleanOrder, OrderBatchExtraction, OrderExtraction
 
 
 UTC = timezone.utc
@@ -62,7 +64,8 @@ class BotDatabase:
 
                 CREATE TABLE IF NOT EXISTS orders (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    conversation_id INTEGER NOT NULL UNIQUE,
+                    conversation_id INTEGER NOT NULL,
+                    source_index INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL,
                     customer_name TEXT NOT NULL,
                     recipient_name TEXT NOT NULL,
@@ -78,10 +81,59 @@ class BotDatabase:
                     confidence REAL NOT NULL,
                     package_count INTEGER NOT NULL,
                     status TEXT NOT NULL,
-                    raw_text TEXT NOT NULL
+                    raw_text TEXT NOT NULL,
+                    UNIQUE(conversation_id, source_index)
                 );
                 """
             )
+            self._migrate_orders_for_batches(db)
+
+    @staticmethod
+    def _migrate_orders_for_batches(db: sqlite3.Connection) -> None:
+        """將舊版一段訊息一筆訂單的表，安全升級成一對多。"""
+
+        columns = {row[1] for row in db.execute("PRAGMA table_info(orders)")}
+        if "source_index" in columns:
+            return
+        db.executescript(
+            """
+            ALTER TABLE orders RENAME TO orders_single_backup;
+            CREATE TABLE orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id INTEGER NOT NULL,
+                source_index INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                customer_name TEXT NOT NULL,
+                recipient_name TEXT NOT NULL,
+                recipient_phone TEXT NOT NULL,
+                recipient_address TEXT NOT NULL,
+                five_jin_boxes INTEGER NOT NULL,
+                ten_jin_boxes INTEGER NOT NULL,
+                sender_name TEXT NOT NULL,
+                sender_phone TEXT NOT NULL,
+                sender_address TEXT NOT NULL,
+                note TEXT NOT NULL,
+                receipt_note TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                package_count INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                raw_text TEXT NOT NULL,
+                UNIQUE(conversation_id, source_index)
+            );
+            INSERT INTO orders (
+                id, conversation_id, source_index, created_at, customer_name,
+                recipient_name, recipient_phone, recipient_address, five_jin_boxes,
+                ten_jin_boxes, sender_name, sender_phone, sender_address, note,
+                receipt_note, confidence, package_count, status, raw_text
+            )
+            SELECT id, conversation_id, 1, created_at, customer_name,
+                recipient_name, recipient_phone, recipient_address, five_jin_boxes,
+                ten_jin_boxes, sender_name, sender_phone, sender_address, note,
+                receipt_note, confidence, package_count, status, raw_text
+            FROM orders_single_backup;
+            DROP TABLE orders_single_backup;
+            """
+        )
 
     def enqueue_event(self, event: dict[str, Any]) -> bool:
         with self.connect() as db:
@@ -143,7 +195,7 @@ class BotDatabase:
             )
             return cursor.rowcount == 1
 
-    def mark_pending(self, conversation_id: int, extraction: OrderExtraction | None, issues: list[str]) -> None:
+    def mark_pending(self, conversation_id: int, extraction: BaseModel | None, issues: list[str]) -> None:
         payload = extraction.model_dump_json() if extraction else None
         with self.connect() as db:
             db.execute(
@@ -151,34 +203,35 @@ class BotDatabase:
                 (payload, json.dumps(issues, ensure_ascii=False), conversation_id),
             )
 
-    def save_ready_order(
+    def save_ready_orders(
         self,
         conversation: sqlite3.Row,
-        extraction: OrderExtraction,
-        order: CleanOrder,
-        package_count: int,
-        sheet_status: str,
-    ) -> int:
+        extraction: OrderBatchExtraction,
+        rows: list[tuple[CleanOrder, int, str]],
+    ) -> list[int]:
         with self.connect() as db:
-            cursor = db.execute(
-                """INSERT INTO orders
-                (conversation_id, created_at, customer_name, recipient_name, recipient_phone,
+            order_ids: list[int] = []
+            for source_index, (order, package_count, sheet_status) in enumerate(rows, start=1):
+                cursor = db.execute(
+                    """INSERT INTO orders
+                (conversation_id, source_index, created_at, customer_name, recipient_name, recipient_phone,
                  recipient_address, five_jin_boxes, ten_jin_boxes, sender_name, sender_phone,
                  sender_address, note, receipt_note, confidence, package_count, status, raw_text)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    conversation["id"], datetime.now(UTC).isoformat(), order.customer_name,
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                    conversation["id"], source_index, datetime.now(UTC).isoformat(), order.customer_name,
                     order.recipient_name, order.recipient_phone, order.recipient_address,
                     order.five_jin_boxes, order.ten_jin_boxes, order.sender_name, order.sender_phone,
                     order.sender_address, order.note, order.receipt_note, order.confidence,
                     package_count, sheet_status, conversation["raw_text"],
-                ),
-            )
+                    ),
+                )
+                order_ids.append(int(cursor.lastrowid))
             db.execute(
                 "UPDATE conversations SET status='completed', extraction_json=?, issues_json='[]' WHERE id=?",
                 (extraction.model_dump_json(), conversation["id"]),
             )
-            return int(cursor.lastrowid)
+            return order_ids
 
     def release_processing(self, conversation_id: int) -> None:
         with self.connect() as db:

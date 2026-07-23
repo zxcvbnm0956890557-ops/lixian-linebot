@@ -41,8 +41,8 @@ def validate_extraction(extraction: OrderExtraction) -> ValidationResult:
 
     if not _valid_name(recipient_name):
         issues.append("收件人姓名缺少或格式不合理")
-    if not re.fullmatch(r"09\d{8}", phone):
-        issues.append("收件人手機必須是 09 開頭共 10 碼")
+    if not re.fullmatch(r"(?:09\d{8}|0[2-8]\d{7,8})", phone):
+        issues.append("收件電話必須是 09 手機或含區碼的臺灣市話")
     if not _valid_address(address):
         issues.append("收件地址缺少縣市或路街巷號等必要資訊")
     if extraction.five_jin_boxes + extraction.ten_jin_boxes <= 0:
@@ -86,4 +86,3 @@ def validate_extraction(extraction: OrderExtraction) -> ValidationResult:
         ),
         issues=(),
     )
-

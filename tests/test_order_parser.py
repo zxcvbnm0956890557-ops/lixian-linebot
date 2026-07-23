@@ -1,5 +1,5 @@
-from models import OrderExtraction
-from order_parser import OrderParser
+from models import OrderBatchExtraction, OrderExtraction
+from order_parser import OrderParser, normalize_order_boundaries
 
 
 class FakeResponses:
@@ -24,9 +24,9 @@ def test_unique_explicit_name_can_fill_missing_recipient():
         five_jin_boxes=20,
         confidence=0.98,
     )
-    parser = OrderParser(client=FakeClient(extraction))
+    parser = OrderParser(client=FakeClient(OrderBatchExtraction(orders=[extraction])))
     result = parser.parse("5斤20\n台北市中山區松江路410號17F，0979869999，李明勳\n管理員代收")
-    assert result.recipient_name == "李明勳"
+    assert result.orders[0].recipient_name == "李明勳"
 
 
 def test_two_names_are_never_guessed():
@@ -38,6 +38,13 @@ def test_two_names_are_never_guessed():
         five_jin_boxes=1,
         confidence=0.70,
     )
-    parser = OrderParser(client=FakeClient(extraction))
+    parser = OrderParser(client=FakeClient(OrderBatchExtraction(orders=[extraction])))
     result = parser.parse("王小美\n李明勳\n0979869999\n台北市中山區松江路410號17F\n5斤1")
-    assert result.recipient_name is None
+    assert result.orders[0].recipient_name is None
+
+
+def test_phone_stuck_to_next_order_spec_gets_safe_boundary():
+    raw = "彰化市中山路二段521號4樓\n09372369135斤4箱（27號配送）\n花如彬0905276555"
+    normalized = normalize_order_boundaries(raw)
+    assert "0937236913\n5斤4箱" in normalized
+    assert "花如彬0905276555" in normalized

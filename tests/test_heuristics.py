@@ -27,3 +27,8 @@ def test_finds_phone_even_when_fields_share_one_line():
 def test_note_is_not_treated_as_name():
     signals = extract_signals("李明勳\n管理員代收")
     assert signals.name_candidates == ("李明勳",)
+
+
+def test_accepts_taiwan_landline_with_area_code():
+    signals = extract_signals("王素卿\n電話：04-7510163\n彰化市自強南路451巷7號10樓")
+    assert signals.phones == ("047510163",)

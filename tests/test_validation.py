@@ -44,3 +44,9 @@ def test_low_confidence_never_auto_accepts():
     result = validate_extraction(base_extraction(confidence=0.79))
     assert result.order is None
     assert "AI 判讀信心不足，需人工確認" in result.issues
+
+
+def test_taiwan_landline_is_allowed():
+    result = validate_extraction(base_extraction(recipient_phone="04-7510163"))
+    assert result.issues == ()
+    assert result.order.recipient_phone == "047510163"

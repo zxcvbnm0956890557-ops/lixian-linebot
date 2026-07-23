@@ -4,7 +4,9 @@ import re
 from dataclasses import dataclass
 
 
-PHONE_RE = re.compile(r"(?<!\d)(?:\+?886[-\s]?)?0?9\d(?:[-\s]?\d){7}(?!\d)")
+PHONE_RE = re.compile(
+    r"(?<!\d)(?:(?:\+?886[-\s]?)?0?9\d(?:[-\s]?\d){7}|0[2-8](?:[-\s]?\d){7,8})(?!\d)"
+)
 QTY_RE = re.compile(r"(?<!\d)(10|5)\s*斤\s*(?:[：:]|[+＋xX×*])?\s*(\d{1,3})\s*(?:箱)?")
 ADDRESS_WORDS = (
     "市",

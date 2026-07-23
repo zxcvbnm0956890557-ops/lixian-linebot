@@ -36,6 +36,16 @@ class OrderExtraction(BaseModel):
     ambiguities: list[str] = Field(default_factory=list)
 
 
+class OrderBatchExtraction(BaseModel):
+    """一段 LINE 文字可能同時包含多位收件人的訂單。"""
+
+    orders: list[OrderExtraction] = Field(default_factory=list, max_length=50)
+    batch_ambiguities: list[str] = Field(
+        default_factory=list,
+        description="無法確定訂單邊界或欄位歸屬時的整批問題",
+    )
+
+
 @dataclass(frozen=True)
 class CleanOrder:
     customer_name: str
@@ -56,4 +66,3 @@ class CleanOrder:
 class ValidationResult:
     order: CleanOrder | None
     issues: tuple[str, ...]
-
