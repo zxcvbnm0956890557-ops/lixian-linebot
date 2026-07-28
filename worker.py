@@ -144,6 +144,8 @@ class OrderWorker:
                     len(extraction.orders),
                     len(issues),
                 )
+                # 只記錄問題類型，不記錄姓名、電話或地址，方便修正真實格式。
+                LOGGER.info("訂單 %s 待確認原因：%s", conversation["id"], "；".join(issues))
                 if not self.dry_run or test_reply:
                     self._notify_safely(
                         conversation["destination_id"],

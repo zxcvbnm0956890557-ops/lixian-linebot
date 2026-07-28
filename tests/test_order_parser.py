@@ -48,3 +48,53 @@ def test_phone_stuck_to_next_order_spec_gets_safe_boundary():
     normalized = normalize_order_boundaries(raw)
     assert "0937236913\n5斤4箱" in normalized
     assert "花如彬0905276555" in normalized
+
+
+def test_unique_hard_signals_correct_ai_field_mixup():
+    extraction = OrderExtraction(
+        recipient_name="0979869999",
+        recipient_phone="李明勳",
+        recipient_address="台北市中山區松江路410號17 F，0979869999，李明勳",
+        five_jin_boxes=0,
+        confidence=0.55,
+        ambiguities=["欄位順序不確定"],
+    )
+    parser = OrderParser(
+        client=FakeClient(
+            OrderBatchExtraction(
+                orders=[extraction], batch_ambiguities=["欄位順序不確定"]
+            )
+        )
+    )
+    result = parser.parse(
+        "5斤20\n台北市中山區松江路410號17 F，0979869999，李明勳\n管理員代收"
+    )
+    order = result.orders[0]
+    assert order.recipient_name == "李明勳"
+    assert order.recipient_phone == "0979869999"
+    assert order.recipient_address == "台北市中山區松江路410號17 F"
+    assert order.five_jin_boxes == 20
+    assert order.confidence >= 0.95
+    assert order.ambiguities == []
+    assert result.batch_ambiguities == []
+
+
+def test_gift_order_is_never_overridden_by_single_order_reconciliation():
+    extraction = OrderExtraction(
+        customer_name="王小美",
+        recipient_name="李明勳",
+        recipient_phone="0979869999",
+        recipient_address="台北市中山區松江路410號17F",
+        five_jin_boxes=1,
+        sender_mode="customer",
+        sender_name="王小美",
+        confidence=0.75,
+        ambiguities=["需確認寄件人"],
+    )
+    parser = OrderParser(client=FakeClient(OrderBatchExtraction(orders=[extraction])))
+    result = parser.parse(
+        "送朋友，寄件人用我的名字寄\n王小美\n收件人：李明勳\n0979869999\n"
+        "台北市中山區松江路410號17F\n5斤1"
+    )
+    assert result.orders[0].sender_mode == "customer"
+    assert result.orders[0].ambiguities == ["需確認寄件人"]

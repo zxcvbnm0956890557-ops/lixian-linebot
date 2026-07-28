@@ -32,3 +32,20 @@ def test_note_is_not_treated_as_name():
 def test_accepts_taiwan_landline_with_area_code():
     signals = extract_signals("王素卿\n電話：04-7510163\n彰化市自強南路451巷7號10樓")
     assert signals.phones == ("047510163",)
+
+
+def test_extracts_atomic_fields_from_one_line():
+    signals = extract_signals("台北市中山區松江路410號17 F，0979869999，李明勳")
+    assert signals.address_lines == ("台北市中山區松江路410號17 F",)
+    assert signals.phones == ("0979869999",)
+    assert signals.name_candidates == ("李明勳",)
+
+
+def test_extracts_name_attached_to_phone():
+    signals = extract_signals("花如彬0905276555\n新北市汐止區大同路一段337巷16弄42號\n5斤4箱")
+    assert signals.name_candidates == ("花如彬",)
+
+
+def test_delivery_note_is_not_a_name():
+    signals = extract_signals("王素卿\n中午12:00前到貨")
+    assert signals.name_candidates == ("王素卿",)

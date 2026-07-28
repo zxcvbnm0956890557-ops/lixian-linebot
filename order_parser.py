@@ -41,6 +41,8 @@ PHONE_THEN_ORDER_RE = re.compile(
     r"(?<!\d)((?:09\d{8})|(?:0[2-8]\d{7,8}))(?=(?:5|10|五|十)\s*斤)"
 )
 
+GIFT_WORDS = ("送朋友", "送老闆", "送禮", "寄件人寫", "用我的名字寄")
+
 
 def normalize_order_boundaries(raw_text: str) -> str:
     """只切開可確定的「完整電話＋下一筆規格」，不改動其他內容。"""
@@ -78,9 +80,29 @@ class OrderParser:
         if parsed is None:
             raise RuntimeError("OpenAI 沒有回傳可驗證的訂單資料")
 
-        # 只有整批確定只有一筆，而且原文恰好一個姓名時，才允許補唯一姓名。
+        # 只有整批確定只有一筆，而且硬訊號各自唯一時，才用原文修正 AI。
+        # 這可處理欄位順序任意、姓名電話黏在一起與標點混用，同時避免多筆
+        # 訂單或送禮情境被錯誤合併。
         if len(parsed.orders) == 1:
             order = parsed.orders[0]
+            unambiguous_normal_order = (
+                len(signals.phones) == 1
+                and len(signals.address_lines) == 1
+                and len(signals.name_candidates) == 1
+                and signals.five_jin_boxes + signals.ten_jin_boxes > 0
+                and not any(word in normalized_text for word in GIFT_WORDS)
+                and order.sender_mode == "farm"
+            )
+            if unambiguous_normal_order:
+                order.recipient_name = signals.name_candidates[0]
+                order.recipient_phone = signals.phones[0]
+                order.recipient_address = signals.address_lines[0]
+                order.five_jin_boxes = signals.five_jin_boxes
+                order.ten_jin_boxes = signals.ten_jin_boxes
+                order.customer_name = order.customer_name or order.recipient_name
+                order.confidence = max(order.confidence, 0.95)
+                order.ambiguities = []
+                parsed.batch_ambiguities = []
             if (
                 not order.recipient_name
                 and len(signals.name_candidates) == 1

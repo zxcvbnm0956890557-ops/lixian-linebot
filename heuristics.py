@@ -36,8 +36,21 @@ LABELED_NAME_RE = re.compile(
 NON_NAME_WORDS = (
     "代收", "備註", "收據", "統編", "公司", "抬頭", "配送", "寄件", "收件",
     "送禮", "送朋友", "送老闆", "回國", "電話", "地址", "姓名", "管理員",
-    "斤", "箱",
+    "斤", "箱", "規格", "訂購", "資訊", "聯絡", "手機",
+    "到貨", "出貨", "上午", "中午", "下午", "晚上", "前到",
 )
+
+
+def _append_unique(values: list[str], value: str) -> None:
+    if value and value not in values:
+        values.append(value)
+
+
+def _looks_like_name(value: str) -> bool:
+    return bool(
+        NAME_TOKEN_RE.fullmatch(value)
+        and not any(word in value for word in NON_NAME_WORDS)
+    )
 
 
 @dataclass(frozen=True)
@@ -98,25 +111,40 @@ def extract_signals(text: str) -> OrderSignals:
             qty10 += parsed_amount
 
     address_lines = []
-    for raw_line in text.splitlines():
-        line = raw_line.strip(" ,，。")
+    # 客人常把地址、電話、姓名寫在同一行；先用常見標點切成欄位，
+    # 讓地址候選不會連同電話與姓名一起交給驗證器。
+    for raw_line in re.split(r"[\n,，、;；|｜]+", text):
+        line = re.sub(
+            r"^(?:地址|住址|收貨住址|收件地址|寄送地址|配送地址)\s*[：:]\s*",
+            "",
+            raw_line.strip(" ,，。"),
+        )
         score = sum(word in line for word in ADDRESS_WORDS)
         if score >= 3 and any(city in line for city in ("市", "縣")):
-            address_lines.append(line)
+            _append_unique(address_lines, line)
 
     name_candidates = []
     for match in LABELED_NAME_RE.finditer(text):
         candidate = match.group(1)
-        if candidate not in name_candidates:
-            name_candidates.append(candidate)
+        if _looks_like_name(candidate):
+            _append_unique(name_candidates, candidate)
     for part in re.split(r"[\n,，、;；]", text):
         candidate = part.strip(" ：:。,.， ")
-        if not NAME_TOKEN_RE.fullmatch(candidate):
-            continue
-        if any(word in candidate for word in NON_NAME_WORDS):
-            continue
-        if candidate not in name_candidates:
-            name_candidates.append(candidate)
+        if _looks_like_name(candidate):
+            _append_unique(name_candidates, candidate)
+
+        # 支援「花如彬0905276555」及「0905276555花如彬」。只取緊貼電話的
+        # 2-6 字中文，避免依照欄位順序猜姓名。
+        compact = re.sub(r"\s+", "", candidate)
+        attached_patterns = (
+            r"([\u3400-\u9fff·]{2,6})(?=(?:\+?886)?0?9\d{8}|0[2-8]\d{7,8})",
+            r"(?:(?:\+?886)?0?9\d{8}|0[2-8]\d{7,8})([\u3400-\u9fff·]{2,6})",
+        )
+        for pattern in attached_patterns:
+            for match in re.finditer(pattern, compact):
+                attached_name = match.group(1)
+                if _looks_like_name(attached_name):
+                    _append_unique(name_candidates, attached_name)
 
     return OrderSignals(
         phones=tuple(phones),
