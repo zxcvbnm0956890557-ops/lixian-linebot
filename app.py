@@ -91,7 +91,24 @@ def health():
 
 @app.get("/status")
 def status():
-    return jsonify({"ok": True, "conversations": database.status_counts()}), 200
+    credentials_configured = bool(
+        os.getenv("GOOGLE_CREDENTIALS_JSON") or os.getenv("GOOGLE_CREDENTIALS")
+    )
+    return jsonify(
+        {
+            "ok": True,
+            "version": os.getenv("RENDER_GIT_COMMIT", "local")[:7],
+            "dry_run": os.getenv("DRY_RUN", "1") == "1",
+            "google_test_sheet_configured": bool(
+                os.getenv("GOOGLE_SHEET_ID") and credentials_configured
+            ),
+            "persistent_database": str(database.path).startswith("/var/data/"),
+            "daily_report_target_configured": bool(
+                os.getenv("LINE_REPORT_TARGET_ID", "").strip()
+            ),
+            "conversations": database.status_counts(),
+        }
+    ), 200
 
 
 start_background_services()
