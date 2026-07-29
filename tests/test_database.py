@@ -48,3 +48,11 @@ def test_completed_customer_can_start_another_order(tmp_path):
     with database.connect() as connection:
         count = connection.execute("SELECT COUNT(*) FROM conversations").fetchone()[0]
     assert count == 2
+def test_settings_are_persisted(tmp_path):
+    database_path = tmp_path / "bot.db"
+    database = BotDatabase(str(database_path))
+    database.set_setting("line_report_target_id", "group-123")
+
+    reopened = BotDatabase(str(database_path))
+    assert reopened.get_setting("line_report_target_id") == "group-123"
+    assert reopened.get_setting("missing") == ""

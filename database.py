@@ -84,6 +84,11 @@ class BotDatabase:
                     raw_text TEXT NOT NULL,
                     UNIQUE(conversation_id, source_index)
                 );
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             self._migrate_orders_for_batches(db)
@@ -239,6 +244,26 @@ class BotDatabase:
                 "UPDATE conversations SET status='collecting' WHERE id=? AND status='processing'",
                 (conversation_id,),
             )
+
+    def mark_command_completed(self, conversation_id: int) -> None:
+        with self.connect() as db:
+            db.execute(
+                "UPDATE conversations SET status='completed', issues_json='[]' WHERE id=?",
+                (conversation_id,),
+            )
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self.connect() as db:
+            db.execute(
+                """INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at""",
+                (key, value, datetime.now(UTC).isoformat()),
+            )
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        with self.connect() as db:
+            row = db.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return str(row["value"]) if row else default
 
     def today_summary(self, local_date: str, timezone_name: str = "Asia/Taipei") -> dict[str, int]:
         local_zone = ZoneInfo(timezone_name)

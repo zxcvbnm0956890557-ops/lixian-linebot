@@ -17,6 +17,7 @@ from validation import validate_extraction
 
 LOGGER = logging.getLogger(__name__)
 TEST_REPLY_PREFIX = "#測試"
+REPORT_GROUP_COMMAND = "#設定報表群組"
 
 
 def split_test_reply_prefix(raw_text: str) -> tuple[bool, str]:
@@ -115,6 +116,17 @@ class OrderWorker:
         extraction = None
         test_reply = False
         try:
+            if conversation["raw_text"].strip() == REPORT_GROUP_COMMAND:
+                self.database.set_setting(
+                    "line_report_target_id", conversation["destination_id"]
+                )
+                self.database.mark_command_completed(conversation["id"])
+                self._notify_safely(
+                    conversation["destination_id"],
+                    "✅ 這個群組已設定為晚上9點測試報表群組。",
+                )
+                LOGGER.info("已設定晚上9點LINE報表群組")
+                return
             test_reply, parse_text = split_test_reply_prefix(conversation["raw_text"])
             LOGGER.info("訂單 %s 開始 AI 解析", conversation["id"])
             extraction = self.parser.parse(parse_text)

@@ -81,3 +81,31 @@ def test_one_message_can_save_three_separate_orders(tmp_path):
     assert orders[2]["recipient_phone"] == "047510163"
     assert len(replies) == 1
     assert "已辨識 3 筆訂單" in replies[0][1]
+def test_report_group_command_is_saved(tmp_path, monkeypatch):
+    monkeypatch.setenv("DRY_RUN", "1")
+    database = BotDatabase(str(tmp_path / "bot.db"))
+    notices = []
+    worker = OrderWorker(
+        database,
+        parser=object(),
+        notifier=lambda destination, text: notices.append((destination, text)),
+    )
+    conversation = {
+        "id": 1,
+        "raw_text": "#設定報表群組",
+        "destination_id": "group-test-123",
+    }
+    with database.connect() as db:
+        db.execute(
+            """INSERT INTO conversations
+            (id, conversation_key, destination_id, user_id, raw_text, last_message_at, status)
+            VALUES (1, 'group:user', 'group-test-123', 'user', '#設定報表群組',
+                    '2026-07-29T00:00:00+00:00', 'processing')"""
+        )
+
+    worker._process(conversation)
+
+    assert database.get_setting("line_report_target_id") == "group-test-123"
+    assert notices == [
+        ("group-test-123", "✅ 這個群組已設定為晚上9點測試報表群組。")
+    ]

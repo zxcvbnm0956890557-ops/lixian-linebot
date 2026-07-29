@@ -33,7 +33,9 @@ def build_daily_message(database: BotDatabase) -> str:
 
 
 def send_daily_report(database: BotDatabase) -> None:
-    target = os.getenv("LINE_REPORT_TARGET_ID", "").strip()
+    target = os.getenv("LINE_REPORT_TARGET_ID", "").strip() or database.get_setting(
+        "line_report_target_id"
+    ).strip()
     if not target:
         LOGGER.warning("未設定 LINE_REPORT_TARGET_ID，略過晚上9點LINE統計")
         return

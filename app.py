@@ -105,6 +105,7 @@ def status():
             "persistent_database": str(database.path).startswith("/var/data/"),
             "daily_report_target_configured": bool(
                 os.getenv("LINE_REPORT_TARGET_ID", "").strip()
+                or database.get_setting("line_report_target_id").strip()
             ),
             "conversations": database.status_counts(),
         }
