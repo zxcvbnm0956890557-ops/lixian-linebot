@@ -73,9 +73,11 @@ def _page(title, message, status=200, **kw):
 @line_login_test.after_request
 def protect(response):
     response.headers["Cache-Control"] = "no-store"
-    response.headers["Referrer-Policy"] = "no-referrer"
+    # Keep Origin on same-origin form POSTs for CSRF validation, but send no
+    # referrer to LINE or any other external destination.
+    response.headers["Referrer-Policy"] = "same-origin"
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; img-src https://*.line-scdn.net; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; img-src https://*.line-scdn.net; form-action 'self' https://access.line.me; frame-ancestors 'none'; base-uri 'none'"
     response.headers["X-Robots-Tag"] = "noindex, nofollow"
     return response
 
