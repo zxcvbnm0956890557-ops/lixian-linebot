@@ -13,6 +13,7 @@ from daily_report import start_daily_scheduler
 from database import BotDatabase
 from line_api import line_access_token_fingerprint, verify_line_signature
 from worker import OrderWorker
+from website_notifications import website_notifications
 
 
 ROOT = Path(__file__).resolve().parent
@@ -26,6 +27,7 @@ logging.basicConfig(
 LOGGER = logging.getLogger(__name__)
 
 app = Flask(__name__)
+app.register_blueprint(website_notifications)
 database = BotDatabase(os.getenv("DATABASE_PATH", str(ROOT / "data" / "bot.db")))
 _services_lock = threading.Lock()
 _services_started = False
