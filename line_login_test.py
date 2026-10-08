@@ -24,6 +24,7 @@ ORIGIN = "https://lixian-linebot.onrender.com"
 CALLBACK = ORIGIN + "/line-login-test/callback"
 COOKIE = "__Secure-lixian-trial"
 PATH = "/line-login-test"
+SITE = "https://lixian-passion-fruit.zxcvbnm0956890557.chatgpt.site"
 TEST_SHEET_ID = "1B7qYGRgJQuUfqdwdwgyzUhSzh6i4u4pe8pgVb4edBcI"
 
 
@@ -224,9 +225,9 @@ form.addEventListener('submit',()=>{const button=document.getElementById('submit
     return response
 
 
-def _validate_order():
-    values = request.form.to_dict()
-    values['same'] = '1' if request.form.get('same') == '1' else '0'
+def _validate_order(input_values=None):
+    values = request.form.to_dict() if input_values is None else dict(input_values)
+    values['same'] = '1' if values.get('same') == '1' else '0'
     errors = []
     try:
         five, ten = int(values.get('five', '')), int(values.get('ten', ''))
@@ -263,11 +264,19 @@ def test_order():
     order, errors, values = _validate_order()
     if errors:
         return _owner_page(profile, token, 422, errors, values)
+    return _process_order(profile, token, order)
+
+
+def _process_order(profile, token, order, site_mode=False):
+    def finish(status=200):
+        if site_mode:
+            return make_response({'receipt': _get(_receipt_key(), 'receipt')}, status)
+        return _owner_page(profile, token, status)
     if _get(_receipt_key(), 'receipt'):
-        return _owner_page(profile, token)
+        return finish()
     message_token = os.getenv("LINE_LOGIN_TEST_MESSAGE_TOKEN", "")
     if not message_token:
-        return _owner_page(profile, token, 503)
+        return finish(503)
     headers = {"Authorization": "Bearer " + message_token}
     receipt = {"id": "TEST-" + uuid.uuid4().hex[:12].upper(),
                "status": "測試訂單已儲存，通知處理中；請勿重複送出。", "order": order}
@@ -276,9 +285,9 @@ def test_order():
     try:
         _put(_receipt_key(), "receipt", receipt, 86400)
     except sqlite3.IntegrityError:
-        return _owner_page(profile, token)
+        return finish()
     except ValueError:
-        return _page("請稍後再試", "尚未傳送訊息。", 429)
+        return make_response({'error': '請稍後再試，尚未傳送訊息。'}, 429) if site_mode else _page("請稍後再試", "尚未傳送訊息。", 429)
     try:
         receipt['sheet_status'] = _save_test_sheet(receipt, profile)
     except Exception:
@@ -308,7 +317,68 @@ def test_order():
     with closing(_db()) as db, db:
         db.execute("UPDATE trial SET payload=? WHERE key=? AND kind='receipt'",
                    (json.dumps(receipt), _hash(_receipt_key())))
-    return redirect(PATH, 303)
+    return finish() if site_mode else redirect(PATH, 303)
+
+
+def _site_authorized():
+    secret = os.getenv('WEBSITE_NOTIFICATION_SECRET', '')
+    return _ready() and bool(secret) and hmac.compare_digest(request.headers.get('Authorization', ''), 'Bearer ' + secret)
+
+
+@line_login_test.get('/site-start')
+def site_start():
+    if not _ready():
+        return _page('測試尚未開放', '請稍後再試。', 503)
+    nonce = request.args.get('nonce', '')
+    if not re.fullmatch(r'[a-f0-9]{64}', nonce):
+        return _page('請重新開始', '請從原網站使用 LINE 登入。', 400)
+    try:
+        five, ten = int(request.args.get('five', '0')), int(request.args.get('ten', '0'))
+        if not 0 <= five <= 40 or not 0 <= ten <= 40 or five == 3 or five + ten == 0:
+            raise ValueError()
+    except ValueError:
+        return _page('箱數不符合配送規格', '請回原網站重新選擇箱數。', 400)
+    browser = secrets.token_urlsafe(32)
+    state, line_nonce, verifier = (secrets.token_urlsafe(32) for _ in range(3))
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode()
+    _put(state, 'flow', {'browser': _hash(browser), 'nonce': line_nonce, 'verifier': verifier, 'site_nonce': nonce, 'cart': {'five': str(five), 'ten': str(ten)}}, 300)
+    response = redirect('https://access.line.me/oauth2/v2.1/authorize?' + urlencode({'response_type': 'code', 'client_id': os.environ['LINE_LOGIN_TEST_CHANNEL_ID'], 'redirect_uri': CALLBACK, 'state': state, 'nonce': line_nonce, 'scope': 'openid profile', 'bot_prompt': 'normal', 'code_challenge': challenge, 'code_challenge_method': 'S256', 'ui_locales': 'zh-TW'}), 303)
+    response.set_cookie(COOKIE, browser, max_age=900, secure=True, httponly=True, samesite='Lax', path=PATH)
+    return response
+
+
+@line_login_test.post('/site-exchange')
+def site_exchange():
+    if not _site_authorized():
+        return make_response({'error': '未授權'}, 403)
+    data = request.get_json(silent=True) or {}
+    ticket = data.get('ticket', '')
+    if not isinstance(ticket, str) or not 40 <= len(ticket) <= 100:
+        return make_response({'error': '登入連線失效'}, 401)
+    grant = _get(ticket, 'site-ticket', consume=True)
+    if not grant or not hmac.compare_digest(grant['nonce'], str(data.get('nonce', ''))):
+        return make_response({'error': '登入連線失效，請重新登入'}, 401)
+    return make_response({'session': grant['session']})
+
+
+@line_login_test.post('/site-session')
+@line_login_test.post('/site-order')
+def site_session():
+    if not _site_authorized():
+        return make_response({'error': '未授權'}, 403)
+    token = request.headers.get('X-Trial-Session', '')
+    profile = _get(token, 'session') if 40 <= len(token) <= 100 else None
+    if not profile:
+        return make_response({'error': '登入已失效，請重新登入'}, 401)
+    if request.path.endswith('/site-session'):
+        return make_response({'profile': profile, 'receipt': _get(_receipt_key(), 'receipt')})
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or any(not isinstance(v, str) for v in data.values()):
+        return make_response({'error': '資料格式不正確'}, 400)
+    order, errors, _ = _validate_order(data)
+    if errors:
+        return make_response({'errors': errors}, 422)
+    return _process_order(profile, token, order, site_mode=True)
 
 
 @line_login_test.post("/start")
@@ -377,6 +447,12 @@ def callback():
         profile = {"name": claims.get("name", "LINE 使用者"), "picture": picture, "tail": claims["sub"][-4:], "friend": friend, "cart": flow.get('cart', {})}
         token = secrets.token_urlsafe(32)
         _put(token, "session", profile, 900)
+        if flow.get('site_nonce'):
+            ticket = secrets.token_urlsafe(32)
+            _put(ticket, 'site-ticket', {'session': token, 'nonce': flow['site_nonce']}, 120)
+            response = redirect(SITE + '/#line_ticket=' + ticket, 303)
+            response.headers['Referrer-Policy'] = 'no-referrer'
+            return response
         response = redirect(PATH, 303)
         response.set_cookie(COOKIE, token, max_age=900, secure=True, httponly=True, samesite="Lax", path=PATH)
         return response
