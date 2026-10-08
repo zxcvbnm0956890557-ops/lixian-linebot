@@ -98,10 +98,25 @@ def home():
         return _page("登入測試尚未開放", "設定完成後才能開始測試。", 503)
     token = request.cookies.get(COOKIE, "")
     profile = _get(token, "session") if token else None
+    cart = None
+    if 'five' in request.args or 'ten' in request.args:
+        try:
+            five, ten = int(request.args.get('five', '0')), int(request.args.get('ten', '0'))
+            if not 0 <= five <= 40 or not 0 <= ten <= 40 or five == 3 or five + ten == 0:
+                raise ValueError()
+            cart = {'five': str(five), 'ten': str(ten)}
+        except ValueError:
+            return _page('箱數不符合測試配送規格', '請回原網站重新選擇箱數。', 400)
     if profile:
-        return _owner_page(profile, token)
+        return _owner_page(profile, token, values=cart or profile.get('cart'))
     token = secrets.token_urlsafe(32)
-    response = _page("試試 LINE 登入", "先體驗登入與身分確認，不會成立正式訂單。", ready=True, csrf=token)
+    if cart:
+        try:
+            _put(token, 'cart', cart, 900)
+        except ValueError:
+            return _page('請稍後再試', '目前測試請求較多。', 429)
+    message = (f"已帶入原網站的箱數：5斤 {cart['five']}箱、10斤 {cart['ten']}箱。登入後填寫資料，送單就會自動通知 LINE。" if cart else "登入後可選箱數、填寫資料，送出測試訂單就會自動通知 LINE。")
+    response = _page("使用 LINE 登入結帳", message, ready=True, csrf=token)
     response.set_cookie(COOKIE, token, max_age=900, secure=True, httponly=True, samesite="Lax", path=PATH)
     return response
 
@@ -119,7 +134,7 @@ def _receipt_key():
 def _owner_page(profile, token, status=200, errors=None, values=None):
     return _page("LINE 登入成功", "以下資料由 LINE 驗證，不用手動填寫暱稱。", status,
                  profile=profile, csrf=token, receipt=_get(_receipt_key(), "receipt"),
-                 message_ready=bool(os.getenv("LINE_LOGIN_TEST_MESSAGE_TOKEN")), errors=errors, values=values or {})
+                 message_ready=bool(os.getenv("LINE_LOGIN_TEST_MESSAGE_TOKEN")), errors=errors, values=values if values is not None else profile.get('cart', {}))
 
 
 def _shipping(five, ten):
@@ -236,7 +251,8 @@ def start():
     state, nonce, verifier = (secrets.token_urlsafe(32) for _ in range(3))
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     try:
-        _put(state, "flow", {"browser": _hash(request.cookies[COOKIE]), "nonce": nonce, "verifier": verifier}, 300)
+        _put(state, "flow", {"browser": _hash(request.cookies[COOKIE]), "nonce": nonce, "verifier": verifier,
+                             "cart": _get(request.cookies[COOKIE], 'cart', consume=True) or {}}, 300)
     except ValueError:
         return _page("請稍後再試", "目前測試請求較多，請稍後重新開始。", 429)
     return redirect("https://access.line.me/oauth2/v2.1/authorize?" + urlencode({
@@ -291,7 +307,7 @@ def callback():
         host = urlparse(picture).hostname or ""
         if urlparse(picture).scheme != "https" or not host.endswith(".line-scdn.net"):
             picture = ""
-        profile = {"name": claims.get("name", "LINE 使用者"), "picture": picture, "tail": claims["sub"][-4:], "friend": friend}
+        profile = {"name": claims.get("name", "LINE 使用者"), "picture": picture, "tail": claims["sub"][-4:], "friend": friend, "cart": flow.get('cart', {})}
         token = secrets.token_urlsafe(32)
         _put(token, "session", profile, 900)
         response = redirect(PATH, 303)
