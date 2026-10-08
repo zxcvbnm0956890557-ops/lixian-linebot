@@ -11,6 +11,8 @@ import secrets
 import sqlite3
 import time
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from contextlib import closing
 from urllib.parse import urlencode, urlparse
 
@@ -22,12 +24,69 @@ ORIGIN = "https://lixian-linebot.onrender.com"
 CALLBACK = ORIGIN + "/line-login-test/callback"
 COOKIE = "__Secure-lixian-trial"
 PATH = "/line-login-test"
+TEST_SHEET_ID = "1B7qYGRgJQuUfqdwdwgyzUhSzh6i4u4pe8pgVb4edBcI"
+
+
+def _save_test_sheet(receipt, profile):
+    """Only the explicitly approved test workbook; never reuse GOOGLE_SHEET_ID."""
+    if os.getenv('LINE_LOGIN_TEST_SHEET_ENABLED') != '1':
+        return '未啟用 Google 測試表寫入。'
+    import gspread
+    from google.oauth2.service_account import Credentials
+    credentials = Credentials.from_service_account_info(
+        json.loads(os.getenv('GOOGLE_CREDENTIALS_JSON') or os.getenv('GOOGLE_CREDENTIALS', '')),
+        scopes=['https://www.googleapis.com/auth/spreadsheets'])
+    book = gspread.authorize(credentials).open_by_key(TEST_SHEET_ID)
+    orders = book.worksheet('Form Responses 1')
+    headers = orders.row_values(1)
+    if len(headers) != 11 or headers[0:2] != ['Column 11', 'Timestamp'] or headers[8:10] != ['5斤百香果 $650/箱', '10斤百香果 $1250/箱']:
+        raise ValueError('test sheet schema changed')
+    binding_headers = ['測試訂單編號', '寫入時間', '訂單列', 'LINE暱稱', 'LINE帳號識別', '5斤箱數', '10斤箱數', '商品小計', '運費', '含運總額']
+    try:
+        binding = book.worksheet('LINE綁定測試')
+    except gspread.WorksheetNotFound:
+        binding = book.add_worksheet('LINE綁定測試', rows=200, cols=10)
+        binding.append_row(binding_headers, value_input_option='RAW')
+    if binding.row_values(1) != binding_headers:
+        raise ValueError('binding sheet schema changed')
+    order = receipt['order']
+    now = datetime.now(ZoneInfo('Asia/Taipei')).strftime('%Y/%m/%d %H:%M:%S')
+    same = order['same'] == '1'
+    result = orders.append_row([
+        '', now, '測試勿出貨—' + order['name'], order['phone'], order['address'] if same else order['recipient_address'],
+        profile['name'], '收貨人就是我：訂購人本人' if same else order['recipient_name'],
+        '收貨人就是我：訂購人本人' if same else order['recipient_phone'],
+        f"5斤：{order['five']}箱", f"10斤：{order['ten']}箱", order['note']], value_input_option='RAW')
+    row_range = result.get('updates', {}).get('updatedRange', '')
+    # Keep this reference even if the second write fails. Never retry a possibly
+    # accepted append automatically: a timeout is not proof that it was rejected.
+    receipt['sheet_order_range'] = row_range
+    # Preserve the existing native table's dropdowns/column rules when its
+    # previous range ended before the newly appended row. Never recreate it.
+    match = re.search(r'!A(\d+):K\d+$', row_range)
+    if match:
+        end_row = int(match.group(1))
+        metadata = book.fetch_sheet_metadata()
+        repairs = []
+        for sheet in metadata.get('sheets', []):
+            if sheet.get('properties', {}).get('title') != 'Form Responses 1':
+                continue
+            for table in sheet.get('tables', []):
+                area = table.get('range', {})
+                if area.get('startRowIndex', 0) == 0 and area.get('startColumnIndex', 0) == 0 and area.get('endColumnIndex') == 11 and area.get('endRowIndex', 0) < end_row:
+                    repairs.append({'updateTable': {'table': {'tableId': table['tableId'], 'range': {**area, 'endRowIndex': end_row}}, 'fields': 'range'}})
+        if repairs:
+            book.batch_update({'requests': repairs})
+    binding.append_row([receipt['id'], now, row_range, profile['name'],
+                        os.environ['LINE_LOGIN_TEST_OWNER_ID'], order['five'], order['ten'],
+                        order['subtotal'], order['shipping'], order['total']], value_input_option='RAW')
+    return '已寫入 Google 測試表及 LINE 綁定紀錄。'
 PAGE = """<!doctype html><html lang="zh-Hant"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>李鮮 LINE 登入測試</title>
 <style>body{margin:0;background:#fbf7ec;color:#173f30;font:18px/1.7 system-ui,sans-serif}main{max-width:560px;margin:8vh auto;padding:28px}h1{font-size:30px;line-height:1.3}p{margin:18px 0}button,a.action{font:inherit;display:inline-block;background:#06c755;color:#fff;border:0;border-radius:8px;padding:14px 24px;text-decoration:none;cursor:pointer}small{display:block;color:#665b62;font-size:16px}img{width:88px;height:88px;border-radius:50%;object-fit:cover}hr{border:0;border-top:1px solid #d8d5c9;margin:28px 0}button.secondary{background:#173f30}label{display:block;margin:16px 0}input:not([type=hidden]):not([type=checkbox]),select{display:block;box-sizing:border-box;width:100%;padding:12px;border:1px solid #8b968b;background:white;font:inherit}input[type=checkbox]{width:24px;height:24px;vertical-align:middle}fieldset{border:0;padding:0;margin:24px 0}legend{font-weight:bold}#total{font-weight:bold;color:#6a3550}button:disabled{opacity:.6} .error{color:#9c2134}</style>
 <main><small>李鮮百香果 · 僅供本人測試</small><h1>{{ title }}</h1><p role="status">{{ message }}</p>
-{% if profile %}{% if profile.picture %}<img src="{{ profile.picture }}" alt="你的 LINE 頭像">{% endif %}<h2>{{ profile.name }}</h2><p>已驗證 LINE 帳號 · 尾碼 {{ profile.tail }}</p><p>官方 LINE 好友狀態：{{ profile.friend }}</p><hr><h2>測試結帳</h2><small>請用測試資料填寫。不收款、不配送、不寫入 Google 試算表。送單後自動通知你的 LINE，不必另外按通知。</small>
-{% if receipt %}<h2>測試訂單已儲存</h2><p>5 斤 × {{ receipt.order.five }} 箱／10 斤 × {{ receipt.order.ten }} 箱</p><p>商品 NT${{ receipt.order.subtotal }}＋運費 NT${{ receipt.order.shipping }}＝NT${{ receipt.order.total }}</p><p role="status">{{ receipt.status }}</p><small>測試編號：{{ receipt.id }}。此輪測試 24 小時內不再發送，避免重複通知。伺服器重新部署會清除暫存紀錄。</small>{% elif message_ready %}
+{% if profile %}{% if profile.picture %}<img src="{{ profile.picture }}" alt="你的 LINE 頭像">{% endif %}<h2>{{ profile.name }}</h2><p>已驗證 LINE 帳號 · 尾碼 {{ profile.tail }}</p><p>官方 LINE 好友狀態：{{ profile.friend }}</p><hr><h2>測試結帳</h2><small>請用測試資料填寫。不收款、不配送、不寫入正式訂單表；僅寫入指定測試表。送單後自動通知你的 LINE，不必另外按通知。</small>
+{% if receipt %}<h2>測試訂單已儲存</h2><p>5 斤 × {{ receipt.order.five }} 箱／10 斤 × {{ receipt.order.ten }} 箱</p><p>商品 NT${{ receipt.order.subtotal }}＋運費 NT${{ receipt.order.shipping }}＝NT${{ receipt.order.total }}</p><p role="status">{{ receipt.sheet_status }}</p><p role="status">{{ receipt.status }}</p><small>測試編號：{{ receipt.id }}。此輪測試 24 小時內不再發送，避免重複通知。伺服器重新部署會清除暫存紀錄。</small>{% elif message_ready %}
 {% if errors %}<div class="error" role="alert">{% for error in errors %}<p>{{ error }}</p>{% endfor %}</div>{% endif %}
 <form id="checkout" method="post" action="/line-login-test/test-order"><input type="hidden" name="csrf" value="{{ csrf }}">
 <fieldset><legend>1. 選擇箱數</legend><label>5 斤百香果 · NT$650／箱<select name="five" id="five">{% for n in range(41) %}{% if n != 3 %}<option value="{{ n }}" {% if values.get('five','1') == n|string %}selected{% endif %}>{{ n }} 箱</option>{% endif %}{% endfor %}</select></label><label>10 斤百香果 · NT$1,250／箱<select name="ten" id="ten">{% for n in range(41) %}<option value="{{ n }}" {% if values.get('ten','0') == n|string %}selected{% endif %}>{{ n }} 箱</option>{% endfor %}</select></label></fieldset>
@@ -220,10 +279,18 @@ def test_order():
         return _owner_page(profile, token)
     except ValueError:
         return _page("請稍後再試", "尚未傳送訊息。", 429)
+    try:
+        receipt['sheet_status'] = _save_test_sheet(receipt, profile)
+    except Exception:
+        # No credentials, contact details, or remote error bodies in logs.
+        receipt['sheet_status'] = ('訂單列已寫入，但 LINE 綁定紀錄未確認，請到測試表核對。'
+                                   if receipt.get('sheet_order_range') else
+                                   'Google 測試表寫入結果未確認，請先核對測試表；不會自動重送。')
     text = ("【測試訂單，請勿出貨】\n我們收到你的測試訂單了。\n"
             + "編號：" + receipt["id"] + f"\n5斤百香果 × {order['five']}箱\n10斤百香果 × {order['ten']}箱\n"
             + f"商品：NT${order['subtotal']}／運費：NT${order['shipping']}\n合計：NT${order['total']}\n"
-            + "僅測試 LINE 登入與通知，不收款、不配送；未寫入正式訂單。")
+            + receipt['sheet_status'] + "\n"
+            + "僅測試，不收款、不配送；未寫入正式訂單。")
     try:
         # Store the order first; a wrong OA or LINE failure must not lose it.
         info = requests.get("https://api.line.me/v2/bot/info", headers=headers, timeout=8)
